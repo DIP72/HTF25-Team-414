@@ -14,6 +14,7 @@ interface CreateThreadProps {
 }
 
 const MAX_POST_CHARS = 1000;
+const MIN_POST_CHARS = 20;
 
 const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
   const [content, setContent] = useState('');
@@ -33,6 +34,7 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
   const compact = (t: string) => t.replace(/\s+/g, ' ').trim();
   const remaining = MAX_POST_CHARS - content.length;
   const overLimit = remaining < 0;
+  const tooShort = compact(content).length < MIN_POST_CHARS && compact(content).length > 0;
 
   // Debounced analysis
   const analyzeTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -45,16 +47,19 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
       clearTimeout(analyzeTimeout.current);
     }
 
-    if (newContent.trim().length > 10) {
+    const trimmed = compact(newContent);
+    
+    // Only analyze if content is substantial enough
+    if (trimmed.length >= MIN_POST_CHARS) {
       analyzeTimeout.current = setTimeout(async () => {
         await analyzeContent(newContent);
-      }, 800);
+      }, 1000); // Increased debounce for better performance
     }
   };
 
   const analyzeContent = async (text: string) => {
     const base = compact(text);
-    if (!base || base.length < 10) return;
+    if (!base || base.length < MIN_POST_CHARS) return;
 
     setIsAnalyzing(true);
     try {
@@ -66,19 +71,18 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
       };
       setAnalysis(newAnalysis);
 
-      // Show warning toast if flagged or blocked
+      // Show warning toast if blocked
       if (result.moderation?.verdict === 'blocked') {
-        toast.error(`Content blocked: ${result.moderation.reason}`);
-      } else if (result.moderation?.verdict === 'flagged') {
-        toast.warning(`Content flagged: ${result.moderation.reason}`);
+        toast.error(`Blocked: ${result.moderation.reason || 'Content violates guidelines'}`);
       }
+      
       return newAnalysis;
     } catch (e: any) {
       console.error('Analysis failed:', e);
       
-      // Handle 403 (blocked) from backend
+      // Handle backend errors gracefully
       if (e.message?.includes('403') || e.message?.includes('blocked')) {
-        setAnalysis({
+        const blockedAnalysis = {
           sentiment: { label: 'NEUTRAL', confidence: 0.5 },
           moderation: { 
             verdict: 'blocked', 
@@ -86,14 +90,13 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
             reason: 'Content violates guidelines' 
           },
           reviewFlag: true
-        });
-        toast.error('Content blocked by moderation system');
-      } else {
-        setAnalysis({
-          sentiment: { label: 'NEUTRAL', confidence: 0.5 },
-          moderation: { verdict: 'safe' }
-        });
+        };
+        setAnalysis(blockedAnalysis);
+        toast.error('Content blocked by moderation');
+        return blockedAnalysis;
       }
+      
+      // Default to safe on network errors
       return {
         sentiment: { label: 'NEUTRAL', confidence: 0.5 },
         moderation: { verdict: 'safe' },
@@ -106,47 +109,50 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
 
   const handlePost = async () => {
     const base = compact(content);
-    if (!base) return;
+    
+    // Validation checks
+    if (!base) {
+      toast.error('Post cannot be empty');
+      return;
+    }
+
+    if (base.length < MIN_POST_CHARS) {
+      toast.error(`Post must be at least ${MIN_POST_CHARS} characters (currently ${base.length})`);
+      return;
+    }
 
     if (base.length > MAX_POST_CHARS) {
       toast.error('Post is too long');
       return;
     }
 
-    // BLOCK if flagged or blocked
-    if (analysis?.moderation?.verdict === 'blocked') {
-      toast.error('This post violates content guidelines and cannot be published.');
-      return;
-    }
-
-    if (analysis?.moderation?.verdict === 'flagged') {
-      toast.error('This post has been flagged and cannot be published. Please revise your content.');
-      return;
-    }
-
-    // Ensure we have analysis before posting (use returned analysis to avoid state-timing issues)
+    // Ensure we have fresh analysis
     let finalAnalysis = analysis;
-    if (!finalAnalysis?.sentiment) {
+    if (!finalAnalysis?.moderation) {
+      setIsAnalyzing(true);
       try {
         const res = await analyzeContent(base);
         if (res) finalAnalysis = res;
       } catch (e) {
         console.error('Pre-post analysis failed:', e);
+        // Allow posting on analysis error (fail open)
+      } finally {
+        setIsAnalyzing(false);
       }
     }
 
-    // Block if moderation says blocked or flagged
-    if (finalAnalysis?.moderation?.verdict === 'blocked' || finalAnalysis?.moderation?.verdict === 'flagged') {
-      toast.error('Cannot post content that violates guidelines');
+    // Block if moderation says blocked
+    if (finalAnalysis?.moderation?.verdict === 'blocked') {
+      toast.error('Cannot post: Content violates guidelines');
       return;
     }
 
-    // Post with analysis data
+    // Post successfully
     onPost(
       base,
       selectedImages.length > 0 ? selectedImages : undefined,
-      analysis?.moderation?.labels || [],
-      analysis?.sentiment || { label: 'NEUTRAL', confidence: 0.5 }
+      finalAnalysis?.moderation?.labels || [],
+      finalAnalysis?.sentiment || { label: 'NEUTRAL', confidence: 0.5 }
     );
 
     toast.success('Post published!');
@@ -198,6 +204,12 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
     try {
       const { draft } = await aiService.draftPost(content);
       const cleaned = draft.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
+      
+      if (cleaned.length < MIN_POST_CHARS) {
+        toast.warning(`Rewritten text is too short (${cleaned.length} chars). Keeping original.`);
+        return;
+      }
+      
       setContent(cleaned);
       await analyzeContent(cleaned);
       toast.success('Content rewritten');
@@ -217,6 +229,12 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
     try {
       const { draft } = await aiService.condenseToPost(content);
       const cleaned = draft.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
+      
+      if (cleaned.length < MIN_POST_CHARS) {
+        toast.warning(`Shortened text is too short (${cleaned.length} chars). Keeping original.`);
+        return;
+      }
+      
       setContent(cleaned);
       await analyzeContent(cleaned);
       toast.success('Content shortened');
@@ -260,7 +278,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
     }, 0);
   };
 
-  // Get sentiment badge
   const getSentimentBadge = () => {
     if (!analysis?.sentiment) return null;
 
@@ -292,7 +309,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
     );
   };
 
-  // Get moderation badge
   const getModerationBadge = () => {
     if (!analysis?.moderation) return null;
 
@@ -319,7 +335,8 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
     return null;
   };
 
-  const isBlocked = analysis?.moderation?.verdict === 'blocked' || analysis?.moderation?.verdict === 'flagged';
+  const isBlocked = analysis?.moderation?.verdict === 'blocked';
+  const canPost = !isBlocked && !tooShort && !overLimit && compact(content).length >= MIN_POST_CHARS;
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4 shadow-sm">
@@ -331,8 +348,10 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
         <div className="flex-1">
           <textarea
             ref={textareaRef}
-            placeholder="What's happening?"
-            className={`w-full bg-transparent text-gray-900 text-base placeholder:text-gray-500 border-none outline-none resize-none min-h-[100px] mb-2 ${overLimit || isBlocked ? 'ring-2 ring-red-300 rounded-lg p-2' : ''}`}
+            placeholder={`What's happening? (min ${MIN_POST_CHARS} characters)`}
+            className={`w-full bg-transparent text-gray-900 text-base placeholder:text-gray-500 border-none outline-none resize-none min-h-[100px] mb-2 ${
+              overLimit || isBlocked || tooShort ? 'ring-2 ring-red-300 rounded-lg p-2' : ''
+            }`}
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
             disabled={isAnalyzing || isProcessing}
@@ -490,6 +509,10 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
               <div className="text-xs text-gray-500">
                 {overLimit ? (
                   <span className="text-red-600 font-medium">Over by {Math.abs(remaining)}</span>
+                ) : tooShort ? (
+                  <span className="text-amber-600 font-medium">
+                    Need {MIN_POST_CHARS - compact(content).length} more
+                  </span>
                 ) : (
                   <span className={remaining < 100 ? 'text-amber-600' : ''}>{remaining}</span>
                 )}
@@ -498,14 +521,14 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
               {/* Post button */}
               <button
                 onClick={handlePost}
-                disabled={!content.trim() || isAnalyzing || isProcessing || overLimit || isBlocked}
+                disabled={!canPost || isAnalyzing || isProcessing}
                 className={`px-5 py-2 rounded-full text-white text-[15px] font-bold transition-all ${
-                  !content.trim() || isAnalyzing || isProcessing || overLimit || isBlocked
+                  !canPost || isAnalyzing || isProcessing
                     ? 'bg-gray-400 cursor-not-allowed'
                     : 'bg-black hover:bg-gray-800'
                 }`}
               >
-                {isAnalyzing ? 'Analyzing...' : isBlocked ? 'Cannot Post' : 'Post'}
+                {isAnalyzing ? 'Analyzing...' : isBlocked ? 'Blocked' : tooShort ? 'Too Short' : 'Post'}
               </button>
             </div>
           </div>
