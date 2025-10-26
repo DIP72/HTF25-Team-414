@@ -1,87 +1,56 @@
 // src/services/aiService.ts
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
-const API_BASE = "http://localhost:8000/api";
-
-export interface ModerationResult {
-  verdict: "safe" | "flagged" | "blocked";
-  confidence: number;
-  labels: string[];
-  reason: string;  // ✅ Added this
-  raw_label: string;
+async function postJSON<T>(path: string, body: any): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${path} failed: ${res.status} ${text}`);
+  }
+  return res.json() as Promise<T>;
 }
 
-export interface DraftResult {
-  draft: string;
-  prompt?: string;
-  context?: string;
-  length: number;
-}
-
-export interface SummaryResult {
-  summary: string;
-  original_length: number;
-  summary_length?: number;
-}
-
-export interface AnalysisResult {
+export interface AnalyzePostResponse {
+  sentiment: { label: string; confidence: number };
   moderation: {
-    verdict: string;
+    verdict: "safe" | "flagged" | "blocked";
     confidence: number;
     labels: string[];
+    reason: string;
     raw_label: string;
-    reason: string;  // ✅ Added this
   };
-  sentiment: {
-    label: string;
-    confidence: number;
-  };
-  flagged: boolean;
-  safe_to_post: boolean;
+  review_flag: boolean;
 }
 
-export const aiService = {
-  async moderateContent(text: string): Promise<ModerationResult> {
-    const response = await fetch(`${API_BASE}/moderate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    return response.json();
+export default {
+  analyzePost(text: string, media_flags?: string[]) {
+    return postJSON<AnalyzePostResponse>("/api/analyze-post", { text, media_flags });
   },
 
-  async draftPost(prompt: string, maxLength: number = 100): Promise<DraftResult> {
-    const response = await fetch(`${API_BASE}/draft-post`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, max_length: maxLength }),
-    });
-    return response.json();
+  moderate(text: string, media_flags?: string[]) {
+    return postJSON<{
+      verdict: "safe" | "flagged" | "blocked";
+      confidence: number;
+      labels: string[];
+      reason: string;
+      raw_label: string;
+      review_flag: boolean;
+    }>("/api/moderate", { text, media_flags });
   },
 
-  async draftReply(context: string, maxLength: number = 80): Promise<DraftResult> {
-    const response = await fetch(`${API_BASE}/draft-reply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: context, max_length: maxLength }),
-    });
-    return response.json();
+  condenseToPost(text: string) {
+    return postJSON<{ draft: string }>("/api/condense-to-post", { text });
   },
 
-  async summarizeThread(texts: string[]): Promise<SummaryResult> {
-    const response = await fetch(`${API_BASE}/summarize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts, max_length: 130, min_length: 30 }),
-    });
-    return response.json();
+  summarizeThread(payload: { texts: string[]; image_counts?: number[]; image_alts?: string[] }) {
+    return postJSON<{ summary: string }>("/api/summarize-thread", payload);
   },
 
-  async analyzePost(text: string): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE}/analyze-post`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    return response.json();
+  draftPost(prompt: string) {
+    return postJSON<{ draft: string; error?: string }>("/api/draft-post", { prompt });
   },
 };
