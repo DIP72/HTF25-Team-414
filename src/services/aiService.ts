@@ -1,106 +1,174 @@
-const API_BASE = "http://localhost:8000";
+const getApiUrl = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+  }
+  return 'http://localhost:5000'
+}
+
+const API_URL = getApiUrl()
 
 interface AnalysisResult {
-  sentiment: {
-    label: string;
-    confidence: number;
-  };
-  moderation: {
-    verdict: "safe" | "flagged" | "blocked";
-    confidence: number;
-    labels: string[];
-    reason: string;
-    raw_label: string;
-  };
-  review_flag: boolean;
-}
-
-interface SentimentOnlyResult {
-  sentiment: {
-    label: string;
-    confidence: number;
-  };
-}
-
-interface SummarizeThreadRequest {
-  texts: string[];
-  image_counts?: number[];
-  image_alts?: string[];
-}
-
-interface SummarizeThreadResponse {
-  summary: string;
-}
-
-interface DraftPostResponse {
-  draft: string;
-  error?: string;
-}
-
-interface CondensePostResponse {
-  draft: string;
+  sentiment: { label: string; confidence: number }
+  moderation?: {
+    verdict: string
+    confidence: number
+    labels: string[]
+    reason: string
+  }
+  labels: string[]
+  message: string
+  review_flag?: boolean
 }
 
 class AIService {
-  private async postJSON<T>(endpoint: string, data: any): Promise<T> {
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(data),
-    });
-
-    if (!response.ok) {
-      throw new Error(`API request failed: ${response.statusText}`);
+  async analyzeContent(content: string): Promise<AnalysisResult> {
+    try {
+      const response = await fetch(`${API_URL}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: content })
+      })
+      
+      if (!response.ok) throw new Error('Analysis failed')
+      const data = await response.json()
+      return {
+        sentiment: data.sentiment,
+        moderation: data.moderation,
+        labels: data.moderation?.labels || [],
+        message: data.moderation?.reason || 'Analysis complete',
+        review_flag: data.review_flag
+      }
+    } catch (error) {
+      console.error('Analysis error:', error)
+      return {
+        sentiment: { label: 'NEUTRAL', confidence: 0.5 },
+        labels: [],
+        message: 'Analysis unavailable'
+      }
     }
-
-    return response.json();
   }
 
-  async analyzePost(text: string, media_flags?: string[]): Promise<AnalysisResult> {
-    return this.postJSON<AnalysisResult>("/api/analyze-post", {
-      text,
-      media_flags: media_flags || [],
-    });
+  async analyzePost(content: string, mediaFlags?: string[]): Promise<AnalysisResult> {
+    return this.analyzeContent(content)
   }
 
-  async getSentimentOnly(text: string): Promise<SentimentOnlyResult> {
-    return this.postJSON<SentimentOnlyResult>("/api/sentiment-only", { text });
+  async rewriteContent(content: string): Promise<{ rewritten_text: string }> {
+    try {
+      const response = await fetch(`${API_URL}/rewrite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: content })
+      })
+      
+      if (!response.ok) throw new Error('Rewrite failed')
+      return await response.json()
+    } catch (error) {
+      console.error('Rewrite error:', error)
+      throw error
+    }
   }
 
-  async moderatePost(text: string, media_flags?: string[]) {
-    return this.postJSON("/api/moderate", {
-      text,
-      media_flags: media_flags || [],
-    });
+  async shortenContent(content: string): Promise<{ shortened_text: string }> {
+    try {
+      const response = await fetch(`${API_URL}/shorten`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: content })
+      })
+      
+      if (!response.ok) throw new Error('Shorten failed')
+      return await response.json()
+    } catch (error) {
+      console.error('Shorten error:', error)
+      throw error
+    }
   }
 
-  async summarizeThread(request: SummarizeThreadRequest): Promise<SummarizeThreadResponse> {
-    return this.postJSON<SummarizeThreadResponse>("/api/summarize-thread", {
-      texts: request.texts,
-      image_counts: request.image_counts || [],
-      image_alts: request.image_alts || [],
-    });
+  async summarizeContent(content: string): Promise<{ summary: string }> {
+    try {
+      const response = await fetch(`${API_URL}/summarize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: content })
+      })
+      
+      if (!response.ok) throw new Error('Summarize failed')
+      return await response.json()
+    } catch (error) {
+      console.error('Summarize error:', error)
+      throw error
+    }
   }
 
-  async draftPost(prompt: string): Promise<DraftPostResponse> {
-    return this.postJSON<DraftPostResponse>("/api/draft-post", {
-      prompt,
-    });
+  async summarizeThread(texts: string[], imageCounts?: number[], imageAlts?: string[]): Promise<{ summary: string }> {
+    try {
+      const response = await fetch(`${API_URL}/api/summarize-thread`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          texts,
+          image_counts: imageCounts,
+          image_alts: imageAlts
+        })
+      })
+      
+      if (!response.ok) throw new Error('Thread summarization failed')
+      return await response.json()
+    } catch (error) {
+      console.error('Thread summarization error:', error)
+      return { summary: texts[0]?.substring(0, 100) || 'Discussion' }
+    }
   }
 
-  async condenseToPost(text: string): Promise<CondensePostResponse> {
-    return this.postJSON<CondensePostResponse>("/api/condense-to-post", {
-      text,
-    });
+  async getSentimentOnly(content: string): Promise<{ sentiment: { label: string; confidence: number } }> {
+    try {
+      const response = await fetch(`${API_URL}/sentiment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: content })
+      })
+      
+      if (!response.ok) throw new Error('Sentiment analysis failed')
+      return await response.json()
+    } catch (error) {
+      console.error('Sentiment error:', error)
+      return {
+        sentiment: { label: 'NEUTRAL', confidence: 0.5 }
+      }
+    }
   }
 
-  async healthCheck() {
-    const response = await fetch(`${API_BASE}/health`);
-    return response.json();
+  async draftPost(prompt: string): Promise<{ draft: string }> {
+    try {
+      const response = await fetch(`${API_URL}/api/draft-post`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      })
+      
+      if (!response.ok) throw new Error('Draft generation failed')
+      return await response.json()
+    } catch (error) {
+      console.error('Draft error:', error)
+      throw error
+    }
+  }
+
+  async condenseToPost(text: string): Promise<{ draft: string }> {
+    try {
+      const response = await fetch(`${API_URL}/api/condense-to-post`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      })
+      
+      if (!response.ok) throw new Error('Condense failed')
+      return await response.json()
+    } catch (error) {
+      console.error('Condense error:', error)
+      throw error
+    }
   }
 }
 
-const aiService = new AIService();
-export default aiService;
+export default new AIService()

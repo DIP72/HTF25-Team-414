@@ -4,6 +4,7 @@ import Post from "@/components/Post";
 import CreateThread from "@/components/CreateThread";
 import ReplyModal from "@/components/ReplyModal";
 import aiService from "@/services/aiService";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Reply {
   id: string;
@@ -39,13 +40,16 @@ interface PostData {
   showReplies?: boolean;
 }
 
-const CURRENT_USER = {
-  username: "Demo User",
-  handle: "demouser",
-  verified: false,
-};
-
 const Index = () => {
+  const { profile } = useAuth()
+  
+  const CURRENT_USER = {
+    username: profile?.username || 'User',
+    handle: profile?.handle || 'user',
+    verified: profile?.verified || false,
+    isAdmin: profile?.role === 'admin',
+  }
+
   const [posts, setPosts] = useState<PostData[]>([
     {
       id: "1",
@@ -265,6 +269,16 @@ const Index = () => {
     setPosts((prev) => [newPost, ...prev]);
   };
 
+  const handleDeletePost = (postId: string) => {
+    setPosts((prev) => prev.filter((p) => p.id !== postId));
+  };
+
+  const handleEditPost = (postId: string, newContent: string) => {
+    setPosts((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, content: newContent } : p))
+    );
+  };
+
   const handleLike = (postId: string) => {
     setPosts((prev) =>
       prev.map((p) =>
@@ -358,7 +372,6 @@ const Index = () => {
   return (
     <Layout>
       <CreateThread onPost={handleCreatePost} currentUser={CURRENT_USER} />
-
       <div>
         {posts.map((post) => (
           <Post
@@ -371,12 +384,15 @@ const Index = () => {
                   : [post.images]
                 : undefined
             }
+            currentUser={CURRENT_USER}
             onLike={() => handleLike(post.id)}
             onReply={() => handleReply(post.id)}
             onRetweet={() => handleRetweet(post.id)}
             onBookmark={() => handleBookmark(post.id)}
             onToggleReplies={() => toggleReplies(post.id)}
             onReplyLike={(replyId) => handleReplyLike(post.id, replyId)}
+            onDelete={() => handleDeletePost(post.id)}
+            onEdit={(newContent) => handleEditPost(post.id, newContent)}
           />
         ))}
       </div>

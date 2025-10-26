@@ -10,6 +10,9 @@ import {
     ChevronLeft,
     ChevronRight,
     Sparkles,
+    Trash2,
+    Edit3,
+    Ban,
 } from "lucide-react";
 import { useState } from "react";
 import aiService from "@/services/aiService";
@@ -47,12 +50,20 @@ interface PostProps {
     isRetweeted?: boolean;
     isBookmarked?: boolean;
     showReplies?: boolean;
+    currentUser: {
+        username: string;
+        handle: string;
+        verified: boolean;
+        isAdmin?: boolean;
+    };
     onLike?: () => void;
     onReply?: () => void;
     onRetweet?: () => void;
     onBookmark?: () => void;
     onToggleReplies?: () => void;
     onReplyLike?: (replyId: string) => void;
+    onDelete?: () => void;
+    onEdit?: (newContent: string) => void;
 }
 
 const Post = (props: PostProps) => {
@@ -73,18 +84,27 @@ const Post = (props: PostProps) => {
         isRetweeted = false,
         isBookmarked = false,
         showReplies = false,
+        currentUser,
         onLike,
         onReply,
         onRetweet,
         onBookmark,
         onToggleReplies,
         onReplyLike,
+        onDelete,
+        onEdit,
     } = props;
 
     const [imageModalOpen, setImageModalOpen] = useState(false);
     const [currentImageIndex, setCurrentImageIndex] = useState(0);
     const [isSummarizing, setIsSummarizing] = useState(false);
     const [threadSummary, setThreadSummary] = useState<string | null>(null);
+    const [showMenu, setShowMenu] = useState(false);
+    const [isEditing, setIsEditing] = useState(false);
+    const [editContent, setEditContent] = useState(content);
+
+    const isOwnPost = currentUser.username === username && currentUser.handle === handle;
+    const canModerate = currentUser.isAdmin || isOwnPost;
 
     const openImageModal = (index: number) => {
         setCurrentImageIndex(index);
@@ -103,14 +123,37 @@ const Post = (props: PostProps) => {
         try {
             const texts = [content, ...replies.map((r) => r.content)];
             const image_counts = [(images?.length ?? 0), ...replies.map((r) => r.images?.length ?? 0)];
-            const image_alts: string[] = [];
-            const { summary } = await aiService.summarizeThread({ texts, image_counts, image_alts });
+            const { summary } = await aiService.summarizeThread(texts, image_counts);
             setThreadSummary(summary || "");
         } catch {
             setThreadSummary("Summary unavailable");
         } finally {
             setIsSummarizing(false);
         }
+    };
+
+    const handleEdit = () => {
+        setIsEditing(true);
+        setShowMenu(false);
+    };
+
+    const handleSaveEdit = () => {
+        if (editContent.trim() && onEdit) {
+            onEdit(editContent.trim());
+            setIsEditing(false);
+        }
+    };
+
+    const handleCancelEdit = () => {
+        setEditContent(content);
+        setIsEditing(false);
+    };
+
+    const handleDelete = () => {
+        if (window.confirm("Are you sure you want to delete this post?")) {
+            onDelete?.();
+        }
+        setShowMenu(false);
     };
 
     return (
@@ -137,9 +180,50 @@ const Post = (props: PostProps) => {
                                 <span className="text-xs sm:text-[15px] text-gray-500 truncate">@{handle}</span>
                                 <span className="text-gray-500 hidden sm:inline">·</span>
                                 <span className="text-xs sm:text-[15px] text-gray-500">{time}</span>
-                                <button className="ml-auto text-gray-500 hover:bg-gray-200 hover:text-gray-900 rounded-full p-1.5 sm:p-2 transition-all duration-200">
-                                    <MoreHorizontal className="w-4 h-4 sm:w-5 sm:h-5" />
-                                </button>
+                                
+                                {canModerate && (
+                                    <div className="ml-auto relative">
+                                        <button 
+                                            onClick={() => setShowMenu(!showMenu)}
+                                            className="text-gray-500 hover:bg-gray-200 hover:text-gray-900 rounded-full p-1.5 sm:p-2 transition-all duration-200"
+                                        >
+                                            <MoreHorizontal className="w-4 h-4 sm:w-5 sm:h-5" />
+                                        </button>
+                                        
+                                        {showMenu && (
+                                            <div className="absolute right-0 top-full mt-1 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[160px] z-20">
+                                                {isOwnPost && (
+                                                    <button
+                                                        onClick={handleEdit}
+                                                        className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-gray-700"
+                                                    >
+                                                        <Edit3 className="w-4 h-4" />
+                                                        Edit
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={handleDelete}
+                                                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-red-600"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                    Delete
+                                                </button>
+                                                {currentUser.isAdmin && !isOwnPost && (
+                                                    <button
+                                                        onClick={() => {
+                                                            alert("User blocked");
+                                                            setShowMenu(false);
+                                                        }}
+                                                        className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-red-600"
+                                                    >
+                                                        <Ban className="w-4 h-4" />
+                                                        Block User
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             {(sentiment || flagLabel) && (
                                 <div className="flex items-center gap-1.5 mt-1 flex-wrap">
@@ -164,9 +248,35 @@ const Post = (props: PostProps) => {
                                 </div>
                             )}
                         </div>
-                        <div className="text-sm sm:text-[15px] text-gray-900 mb-2 sm:mb-3 leading-normal break-words whitespace-pre-wrap">
-                            {parseMarkdown(content)}
-                        </div>
+                        
+                        {isEditing ? (
+                            <div className="mb-3">
+                                <textarea
+                                    value={editContent}
+                                    onChange={(e) => setEditContent(e.target.value)}
+                                    className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm resize-none min-h-[100px] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                                <div className="flex gap-2 mt-2">
+                                    <button
+                                        onClick={handleSaveEdit}
+                                        className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+                                    >
+                                        Save
+                                    </button>
+                                    <button
+                                        onClick={handleCancelEdit}
+                                        className="px-4 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-sm sm:text-[15px] text-gray-900 mb-2 sm:mb-3 leading-normal break-words whitespace-pre-wrap">
+                                {parseMarkdown(content)}
+                            </div>
+                        )}
+                        
                         {threadSummary && (
                             <div className="mb-2 sm:mb-3">
                                 <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl px-4 py-3 shadow-sm">
