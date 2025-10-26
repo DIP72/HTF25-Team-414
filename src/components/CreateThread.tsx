@@ -1,7 +1,8 @@
-import { useState, useRef } from "react";
-import { Image as ImageIcon, Smile, User, X, Sparkles, Loader2, ShieldAlert, Bold, Italic, Underline, Eye } from "lucide-react";
-import aiService from "@/services/aiService";
-import { parseMarkdown } from "@/utils/markdown";
+import { useState, useRef } from 'react';
+import { Image as ImageIcon, User, X, Sparkles, Loader2, ShieldAlert, Bold, Italic, Underline, Eye, AlertTriangle } from 'lucide-react';
+import aiService from '@/services/aiService';
+import { parseMarkdown } from '@/utils/markdown';
+import { toast } from 'sonner';
 
 interface CreateThreadProps {
   onPost: (content: string, images?: string[], labels?: string[], sentiment?: { label: string; confidence: number }) => void;
@@ -15,63 +16,145 @@ interface CreateThreadProps {
 const MAX_POST_CHARS = 1000;
 
 const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
-  const [content, setContent] = useState("");
+  const [content, setContent] = useState('');
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [pill, setPill] = useState<{ kind: "flagged" | "blocked"; label: string } | null>(null);
+  const [analysis, setAnalysis] = useState<{
+    sentiment?: { label: string; confidence: number };
+    moderation?: { verdict: string; labels?: string[]; reason?: string };
+    reviewFlag?: boolean;
+  } | null>(null);
   const [showAIMenu, setShowAIMenu] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const compact = (t: string) => t.replace(/\s+/g, " ").trim();
+  const compact = (t: string) => t.replace(/\s+/g, ' ').trim();
   const remaining = MAX_POST_CHARS - content.length;
   const overLimit = remaining < 0;
+
+  // Debounced analysis
+  const analyzeTimeout = useRef<NodeJS.Timeout | null>(null);
+  
+  const handleContentChange = (newContent: string) => {
+    setContent(newContent);
+    setAnalysis(null);
+
+    if (analyzeTimeout.current) {
+      clearTimeout(analyzeTimeout.current);
+    }
+
+    if (newContent.trim().length > 10) {
+      analyzeTimeout.current = setTimeout(async () => {
+        await analyzeContent(newContent);
+      }, 800);
+    }
+  };
+
+  const analyzeContent = async (text: string) => {
+    const base = compact(text);
+    if (!base || base.length < 10) return;
+
+    setIsAnalyzing(true);
+    try {
+      const result = await aiService.analyzePost(base);
+      const newAnalysis = {
+        sentiment: result.sentiment,
+        moderation: result.moderation,
+        reviewFlag: result.review_flag,
+      };
+      setAnalysis(newAnalysis);
+
+      // Show warning toast if flagged or blocked
+      if (result.moderation?.verdict === 'blocked') {
+        toast.error(`Content blocked: ${result.moderation.reason}`);
+      } else if (result.moderation?.verdict === 'flagged') {
+        toast.warning(`Content flagged: ${result.moderation.reason}`);
+      }
+      return newAnalysis;
+    } catch (e: any) {
+      console.error('Analysis failed:', e);
+      
+      // Handle 403 (blocked) from backend
+      if (e.message?.includes('403') || e.message?.includes('blocked')) {
+        setAnalysis({
+          sentiment: { label: 'NEUTRAL', confidence: 0.5 },
+          moderation: { 
+            verdict: 'blocked', 
+            labels: ['violation'],
+            reason: 'Content violates guidelines' 
+          },
+          reviewFlag: true
+        });
+        toast.error('Content blocked by moderation system');
+      } else {
+        setAnalysis({
+          sentiment: { label: 'NEUTRAL', confidence: 0.5 },
+          moderation: { verdict: 'safe' }
+        });
+      }
+      return {
+        sentiment: { label: 'NEUTRAL', confidence: 0.5 },
+        moderation: { verdict: 'safe' },
+        reviewFlag: false,
+      };
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const handlePost = async () => {
     const base = compact(content);
     if (!base) return;
 
     if (base.length > MAX_POST_CHARS) {
-      setPill({ kind: "flagged", label: `Over ${MAX_POST_CHARS}` });
+      toast.error('Post is too long');
       return;
     }
 
-    setIsAnalyzing(true);
-    setPill(null);
-
-    try {
-      const analysis = await aiService.analyzePost(base);
-      const { moderation, sentiment, review_flag } = analysis;
-
-      if (moderation.verdict === "blocked") {
-        setPill({ kind: "blocked", label: moderation.labels?.[0] || "Blocked" });
-        setIsAnalyzing(false);
-        return;
-      }
-
-      if (moderation.verdict === "flagged" || review_flag) {
-        setPill({ kind: "flagged", label: moderation.labels?.[0] || "Flagged" });
-      }
-
-      onPost(
-        base,
-        selectedImages.length > 0 ? selectedImages : undefined,
-        moderation.verdict === "flagged" || review_flag ? moderation.labels : [],
-        sentiment
-      );
-
-      setContent("");
-      setSelectedImages([]);
-      setPill(null);
-    } catch (e) {
-      onPost(base, selectedImages.length > 0 ? selectedImages : undefined);
-      setContent("");
-      setSelectedImages([]);
-    } finally {
-      setIsAnalyzing(false);
+    // BLOCK if flagged or blocked
+    if (analysis?.moderation?.verdict === 'blocked') {
+      toast.error('This post violates content guidelines and cannot be published.');
+      return;
     }
+
+    if (analysis?.moderation?.verdict === 'flagged') {
+      toast.error('This post has been flagged and cannot be published. Please revise your content.');
+      return;
+    }
+
+    // Ensure we have analysis before posting (use returned analysis to avoid state-timing issues)
+    let finalAnalysis = analysis;
+    if (!finalAnalysis?.sentiment) {
+      try {
+        const res = await analyzeContent(base);
+        if (res) finalAnalysis = res;
+      } catch (e) {
+        console.error('Pre-post analysis failed:', e);
+      }
+    }
+
+    // Block if moderation says blocked or flagged
+    if (finalAnalysis?.moderation?.verdict === 'blocked' || finalAnalysis?.moderation?.verdict === 'flagged') {
+      toast.error('Cannot post content that violates guidelines');
+      return;
+    }
+
+    // Post with analysis data
+    onPost(
+      base,
+      selectedImages.length > 0 ? selectedImages : undefined,
+      analysis?.moderation?.labels || [],
+      analysis?.sentiment || { label: 'NEUTRAL', confidence: 0.5 }
+    );
+
+    toast.success('Post published!');
+    
+    // Reset
+    setContent('');
+    setSelectedImages([]);
+    setAnalysis(null);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -89,26 +172,18 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
       }
 
       const reader = new FileReader();
-      
       reader.onload = () => {
         newImages.push(reader.result as string);
         loadedCount++;
-        
         if (loadedCount === fileArray.length) {
           setSelectedImages((prev) => [...prev, ...newImages]);
         }
       };
-
-      reader.onerror = () => {
-        loadedCount++;
-      };
-
+      reader.onerror = () => loadedCount++;
       reader.readAsDataURL(file);
     });
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const removeImage = (index: number) => {
@@ -122,10 +197,13 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
 
     try {
       const { draft } = await aiService.draftPost(content);
-      const cleaned = draft.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").replace(/#\w+/g, "").trim();
+      const cleaned = draft.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
       setContent(cleaned);
+      await analyzeContent(cleaned);
+      toast.success('Content rewritten');
     } catch (e) {
-      console.error("AI Rewrite failed:", e);
+      console.error('AI Rewrite failed:', e);
+      toast.error('Rewrite failed');
     } finally {
       setIsProcessing(false);
     }
@@ -138,34 +216,36 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
 
     try {
       const { draft } = await aiService.condenseToPost(content);
-      const cleaned = draft.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "").replace(/#\w+/g, "").trim();
+      const cleaned = draft.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s+/g, ' ').trim();
       setContent(cleaned);
+      await analyzeContent(cleaned);
+      toast.success('Content shortened');
     } catch (e) {
-      console.error("AI Condense failed:", e);
+      console.error('AI Condense failed:', e);
+      toast.error('Condense failed');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const applyFormat = (formatType: "bold" | "italic" | "underline") => {
+  const applyFormat = (formatType: 'bold' | 'italic' | 'underline') => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const selectedText = content.substring(start, end);
-
     if (!selectedText) return;
 
     let formatted: string;
     switch (formatType) {
-      case "bold":
+      case 'bold':
         formatted = `**${selectedText}**`;
         break;
-      case "italic":
+      case 'italic':
         formatted = `*${selectedText}*`;
         break;
-      case "underline":
+      case 'underline':
         formatted = `__${selectedText}__`;
         break;
     }
@@ -180,86 +260,124 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
     }, 0);
   };
 
-  const handleClickOutside = () => {
-    if (showAIMenu) setShowAIMenu(false);
+  // Get sentiment badge
+  const getSentimentBadge = () => {
+    if (!analysis?.sentiment) return null;
+
+    const { label, confidence } = analysis.sentiment;
+
+    const normalize = (lab?: string) => {
+      if (!lab) return 'neutral';
+      const l = lab.toString().toLowerCase().trim();
+      if (l.includes('pos') || l === '1' || l.includes('label_2')) return 'positive';
+      if (l.includes('neg') || l === '0' || l.includes('label_0')) return 'negative';
+      return 'neutral';
+    };
+
+    const norm = normalize(label);
+    const sentimentStyles: Record<string, string> = {
+      positive: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      negative: 'bg-rose-50 text-rose-700 border-rose-200',
+      neutral: 'bg-slate-50 text-slate-600 border-slate-200',
+    };
+
+    const style = sentimentStyles[norm] || 'bg-gray-50 text-gray-600 border-gray-200';
+    const displayLabel = norm.charAt(0).toUpperCase() + norm.slice(1);
+    const confidencePercent = Math.round((confidence ?? 0) * 100);
+
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border ${style}`}>
+        {displayLabel} {confidencePercent}%
+      </span>
+    );
   };
 
+  // Get moderation badge
+  const getModerationBadge = () => {
+    if (!analysis?.moderation) return null;
+
+    const { verdict, labels, reason } = analysis.moderation;
+
+    if (verdict === 'blocked') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-red-50 text-red-700 border border-red-200" title={reason || 'Blocked content'}>
+          <ShieldAlert className="w-3 h-3" />
+          blocked
+        </span>
+      );
+    }
+
+    if (verdict === 'flagged') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200" title={reason || 'Needs review'}>
+          <AlertTriangle className="w-3 h-3" />
+          {labels?.[0] || 'flagged'}
+        </span>
+      );
+    }
+
+    return null;
+  };
+
+  const isBlocked = analysis?.moderation?.verdict === 'blocked' || analysis?.moderation?.verdict === 'flagged';
+
   return (
-    <div className="bg-gray-50 rounded-2xl p-3 sm:p-4 mb-4" onClick={handleClickOutside}>
-      <div className="flex gap-2 sm:gap-3">
-        <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gray-300 flex items-center justify-center flex-shrink-0">
-          <User className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" strokeWidth={2} />
+    <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4 shadow-sm">
+      <div className="flex gap-3">
+        <div className="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center flex-shrink-0">
+          <User className="w-5 h-5 text-gray-600" strokeWidth={2} />
         </div>
 
         <div className="flex-1">
           <textarea
             ref={textareaRef}
             placeholder="What's happening?"
-            className={`w-full bg-transparent text-gray-900 text-base sm:text-[18px] placeholder:text-gray-500 border-none outline-none resize-none min-h-[80px] sm:min-h-[100px] mb-2 ${
-              overLimit ? "ring-2 ring-red-300 rounded-lg p-2" : ""
-            }`}
+            className={`w-full bg-transparent text-gray-900 text-base placeholder:text-gray-500 border-none outline-none resize-none min-h-[100px] mb-2 ${overLimit || isBlocked ? 'ring-2 ring-red-300 rounded-lg p-2' : ''}`}
             value={content}
-            onChange={(e) => {
-              setContent(e.target.value);
-              setPill(null);
-            }}
+            onChange={(e) => handleContentChange(e.target.value)}
             disabled={isAnalyzing || isProcessing}
           />
 
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs text-gray-500">
-              {overLimit ? (
-                <span className="text-red-600 font-medium">Over limit by {Math.abs(remaining)} chars</span>
-              ) : (
-                <span className={remaining < 100 ? "text-amber-600" : ""}>{remaining} left</span>
-              )}
-            </div>
-            {pill && (
-              <span
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium ${
-                  pill.kind === "blocked" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"
-                }`}
-                title={pill.label}
-              >
-                <ShieldAlert className="w-3.5 h-3.5" />
-                {pill.label}
-              </span>
-            )}
-          </div>
-
+          {/* Image Previews */}
           {selectedImages.length > 0 && (
-            <div className={`mb-3 grid gap-2 ${
-              selectedImages.length === 1 ? "grid-cols-1" : 
-              selectedImages.length === 2 ? "grid-cols-2" :
-              selectedImages.length === 3 ? "grid-cols-3" :
-              "grid-cols-2"
-            }`}>
+            <div className="flex flex-wrap gap-2 mb-3">
               {selectedImages.map((img, idx) => (
-                <div key={idx} className="relative rounded-xl overflow-hidden">
-                  <img 
-                    src={img} 
-                    alt={`Preview ${idx + 1}`} 
-                    className="w-full h-48 object-cover rounded-xl" 
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect fill='%23ddd' width='100' height='100'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23999'%3EError%3C/text%3E%3C/svg%3E";
-                    }}
-                  />
+                <div key={idx} className="relative group">
+                  <img src={img} alt={`Upload ${idx + 1}`} className="h-20 w-20 object-cover rounded-lg" />
                   <button
                     onClick={() => removeImage(idx)}
-                    className="absolute top-2 right-2 w-7 h-7 bg-black/70 hover:bg-black rounded-full flex items-center justify-center transition-colors"
+                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
                   >
-                    <X className="w-4 h-4 text-white" />
+                    <X className="w-3 h-3" />
                   </button>
                 </div>
               ))}
             </div>
           )}
 
+          {/* Analysis Badges */}
+          {(analysis || isAnalyzing) && (
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              {isAnalyzing && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-blue-50 text-blue-600 border border-blue-200">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  analyzing...
+                </span>
+              )}
+              {!isAnalyzing && getSentimentBadge()}
+              {!isAnalyzing && getModerationBadge()}
+            </div>
+          )}
+
+          {/* Preview */}
           {showPreview && content.trim() && (
-            <div className="mb-3 p-3 bg-white rounded-xl border border-gray-200">
+            <div className="mb-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-gray-500">Preview</span>
-                <button onClick={() => setShowPreview(false)} className="text-xs text-blue-600 hover:underline">
+                <button
+                  onClick={() => setShowPreview(false)}
+                  className="text-xs text-blue-600 hover:underline"
+                >
                   Hide
                 </button>
               </div>
@@ -269,30 +387,30 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
             </div>
           )}
 
+          {/* Controls */}
           <div className="flex items-center justify-between pt-3 border-t border-gray-200">
-            <div className="flex items-center gap-0.5 sm:gap-1">
+            <div className="flex items-center gap-1">
+              {/* Format buttons */}
               <button
-                onClick={() => applyFormat("bold")}
-                className="p-2 text-gray-600 hover:bg-gray-200 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Bold (select text first)"
+                onClick={() => applyFormat('bold')}
+                className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Bold"
                 disabled={isAnalyzing || isProcessing}
               >
                 <Bold className="w-4 h-4" strokeWidth={2.5} />
               </button>
-
               <button
-                onClick={() => applyFormat("italic")}
-                className="p-2 text-gray-600 hover:bg-gray-200 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Italic (select text first)"
+                onClick={() => applyFormat('italic')}
+                className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Italic"
                 disabled={isAnalyzing || isProcessing}
               >
                 <Italic className="w-4 h-4" strokeWidth={2.5} />
               </button>
-
               <button
-                onClick={() => applyFormat("underline")}
-                className="p-2 text-gray-600 hover:bg-gray-200 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Underline (select text first)"
+                onClick={() => applyFormat('underline')}
+                className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Underline"
                 disabled={isAnalyzing || isProcessing}
               >
                 <Underline className="w-4 h-4" strokeWidth={2.5} />
@@ -300,6 +418,7 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
 
               <div className="w-px h-6 bg-gray-300 mx-1" />
 
+              {/* Image upload */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -311,18 +430,17 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="p-2 text-gray-600 hover:bg-gray-200 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40"
-                title="Upload images (multiple)"
+                className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40"
+                title="Upload images"
                 disabled={isAnalyzing || isProcessing}
               >
                 <ImageIcon className="w-5 h-5" strokeWidth={2} />
               </button>
 
+              {/* Preview toggle */}
               <button
                 onClick={() => setShowPreview(!showPreview)}
-                className={`p-2 rounded-lg transition-all ${
-                  showPreview ? "bg-blue-100 text-blue-600" : "text-gray-600 hover:bg-gray-200 hover:text-gray-900"
-                }`}
+                className={`p-2 rounded-lg transition-all ${showPreview ? 'bg-blue-100 text-blue-600' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
                 title="Toggle preview"
                 disabled={!content.trim()}
               >
@@ -331,6 +449,7 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
 
               <div className="w-px h-6 bg-gray-300 mx-1" />
 
+              {/* AI Tools */}
               <div className="relative" onClick={(e) => e.stopPropagation()}>
                 <button
                   onClick={() => setShowAIMenu(!showAIMenu)}
@@ -364,27 +483,31 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
                   </div>
                 )}
               </div>
-
-              <button
-                className="p-2 text-gray-600 hover:bg-gray-200 hover:text-gray-900 rounded-full transition-all disabled:opacity-40"
-                disabled={isAnalyzing || isProcessing}
-                title="Emoji"
-              >
-                <Smile className="w-5 h-5" strokeWidth={2} />
-              </button>
             </div>
 
-            <button
-              onClick={handlePost}
-              disabled={!content.trim() || isAnalyzing || isProcessing || overLimit}
-              className={`px-5 py-2 rounded-full text-white text-[15px] font-bold transition-all ${
-                !content.trim() || isAnalyzing || isProcessing || overLimit
-                  ? "bg-gray-400 cursor-not-allowed"
-                  : "bg-black hover:bg-gray-800"
-              }`}
-            >
-              {isAnalyzing ? "Analyzing..." : "Post"}
-            </button>
+            <div className="flex items-center gap-3">
+              {/* Character count */}
+              <div className="text-xs text-gray-500">
+                {overLimit ? (
+                  <span className="text-red-600 font-medium">Over by {Math.abs(remaining)}</span>
+                ) : (
+                  <span className={remaining < 100 ? 'text-amber-600' : ''}>{remaining}</span>
+                )}
+              </div>
+
+              {/* Post button */}
+              <button
+                onClick={handlePost}
+                disabled={!content.trim() || isAnalyzing || isProcessing || overLimit || isBlocked}
+                className={`px-5 py-2 rounded-full text-white text-[15px] font-bold transition-all ${
+                  !content.trim() || isAnalyzing || isProcessing || overLimit || isBlocked
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-black hover:bg-gray-800'
+                }`}
+              >
+                {isAnalyzing ? 'Analyzing...' : isBlocked ? 'Cannot Post' : 'Post'}
+              </button>
+            </div>
           </div>
         </div>
       </div>

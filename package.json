@@ -1,13 +1,25 @@
 {
   "name": "threadsai",
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
-    "frontend": "vite",
-    "backend": "cd backend && source venv/bin/activate && uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run backend\" \"npm run frontend\"",
+    "dev:network": "concurrently -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run backend\" \"npm run frontend:network\"",
+    
+    "frontend": "vite --host",
+    "frontend:network": "vite --host --mode network",
+    
+    "backend": "cd backend && python main.py",
+    "backend:dev": "cd backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
+    
     "setup-backend": "cd backend && python -m venv venv && pip install -r requirements.txt",
+    "setup-backend:windows": "cd backend && python -m venv venv && .\\venv\\Scripts\\activate && pip install -r requirements.txt",
+    
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview --host",
+    
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
     "@radix-ui/react-tabs": "^1.1.13",

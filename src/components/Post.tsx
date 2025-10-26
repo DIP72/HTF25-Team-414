@@ -156,6 +156,17 @@ const Post = (props: PostProps) => {
         setShowMenu(false);
     };
 
+    // Normalize many possible sentiment label formats to one of 'positive' | 'negative' | 'neutral'
+    const normalizeSentiment = (label?: string): "positive" | "negative" | "neutral" => {
+        if (!label) return "neutral";
+        const l = String(label).toLowerCase().trim();
+        // common variants from different models/pipelines
+        if (l.includes("pos") || l === "1" || l.includes("label_2") || l === "label2") return "positive";
+        if (l.includes("neg") || l === "0" || l.includes("label_0") || l === "label0") return "negative";
+        // numeric probabilities like '0.78' are not labels; fallback to neutral
+        return "neutral";
+    };
+
     return (
         <div className="mb-4">
             <article className="bg-gray-50 rounded-2xl p-3 sm:p-4 hover:bg-gray-100 transition-colors duration-200">
@@ -227,19 +238,22 @@ const Post = (props: PostProps) => {
                             </div>
                             {(sentiment || flagLabel) && (
                                 <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                    {sentiment && (
-                                        <span
-                                            className={`text-[10px] sm:text-[11px] px-2 sm:px-2.5 py-0.5 rounded-full font-medium whitespace-nowrap ${
-                                                sentiment.label.toLowerCase() === "positive"
-                                                    ? "bg-green-100 text-green-700"
-                                                    : sentiment.label.toLowerCase() === "negative"
-                                                    ? "bg-red-100 text-red-700"
-                                                    : "bg-gray-100 text-gray-700"
-                                            }`}
-                                        >
-                                            {sentiment.label.charAt(0).toUpperCase() + sentiment.label.slice(1)} • {Math.round(sentiment.confidence * 100)}%
-                                        </span>
-                                    )}
+                                    {sentiment && (() => {
+                                        const s = normalizeSentiment(sentiment.label);
+                                        const colorClass =
+                                            s === "positive"
+                                                ? "bg-green-100 text-green-700"
+                                                : s === "negative"
+                                                ? "bg-red-100 text-red-700"
+                                                : "bg-gray-100 text-gray-700";
+                                        const displayLabel = s.charAt(0).toUpperCase() + s.slice(1);
+                                        const confidence = Math.round((sentiment.confidence ?? 0) * 100);
+                                        return (
+                                            <span className={`text-[10px] sm:text-[11px] px-2 sm:px-2.5 py-0.5 rounded-full font-medium whitespace-nowrap ${colorClass}`}>
+                                                {displayLabel} • {confidence}%
+                                            </span>
+                                        );
+                                    })()}
                                     {flagLabel && (
                                         <span className="text-[10px] sm:text-[11px] px-2 sm:px-2.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700 whitespace-nowrap">
                                             {flagLabel}
@@ -377,15 +391,20 @@ const Post = (props: PostProps) => {
                                                             <span className="text-xs sm:text-sm text-gray-500 truncate">@{reply.handle}</span>
                                                             <span className="text-gray-500 hidden sm:inline">·</span>
                                                             <span className="text-xs sm:text-sm text-gray-500">{reply.time}</span>
-                                                            {reply.sentiment && (
-                                                                <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap ml-auto ${
-                                                                    reply.sentiment.label.toLowerCase() === 'positive' ? 'bg-green-100 text-green-700'
-                                                                    : reply.sentiment.label.toLowerCase() === 'negative' ? 'bg-red-100 text-red-700'
-                                                                    : 'bg-gray-200 text-gray-700'
-                                                                }`}>
-                                                                    {reply.sentiment.label.charAt(0).toUpperCase() + reply.sentiment.label.slice(1)} • {Math.round(reply.sentiment.confidence * 100)}%
-                                                                </span>
-                                                            )}
+                                                            {reply.sentiment && (() => {
+                                                                const s = normalizeSentiment(reply.sentiment?.label);
+                                                                const badgeClass =
+                                                                    s === 'positive' ? 'bg-green-100 text-green-700'
+                                                                    : s === 'negative' ? 'bg-red-100 text-red-700'
+                                                                    : 'bg-gray-200 text-gray-700';
+                                                                const display = s.charAt(0).toUpperCase() + s.slice(1);
+                                                                const conf = Math.round((reply.sentiment?.confidence ?? 0) * 100);
+                                                                return (
+                                                                    <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap ml-auto ${badgeClass}`}>
+                                                                        {display} • {conf}%
+                                                                    </span>
+                                                                );
+                                                            })()}
                                                         </div>
                                                         <div className="text-xs sm:text-sm text-gray-900 mb-2 break-words whitespace-pre-wrap leading-relaxed">
                                                             {parseMarkdown(reply.content)}

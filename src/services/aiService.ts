@@ -1,140 +1,69 @@
-const getApiUrl = () => {
+const getApiUrl = (): string => {
   if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL
+    return import.meta.env.VITE_API_URL;
   }
-  return 'http://localhost:5000'
-}
+  return 'http://localhost:8000';
+};
 
-const API_URL = getApiUrl()
+const API_URL = getApiUrl();
 
 interface AnalysisResult {
-  sentiment: { label: string; confidence: number }
+  sentiment: {
+    label: string;
+    confidence: number;
+  };
   moderation?: {
-    verdict: string
-    confidence: number
-    labels: string[]
-    reason: string
-  }
-  labels: string[]
-  message: string
-  review_flag?: boolean
+    verdict: string;
+    confidence: number;
+    labels?: string[];
+    reason?: string;
+  };
+  labels?: string[];
+  message?: string;
+  review_flag?: boolean;
 }
 
 class AIService {
-  async analyzeContent(content: string): Promise<AnalysisResult> {
+  async analyzePost(content: string, mediaFlags?: string[]): Promise<AnalysisResult> {
     try {
-      const response = await fetch(`${API_URL}/analyze`, {
+      const response = await fetch(`${API_URL}/api/analyze-post`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: content })
-      })
+        body: JSON.stringify({ text: content, media_flags: mediaFlags || [] })
+      });
+
+      if (!response.ok) throw new Error('Analysis failed');
       
-      if (!response.ok) throw new Error('Analysis failed')
-      const data = await response.json()
+      const data = await response.json();
       return {
         sentiment: data.sentiment,
         moderation: data.moderation,
-        labels: data.moderation?.labels || [],
-        message: data.moderation?.reason || 'Analysis complete',
         review_flag: data.review_flag
-      }
+      };
     } catch (error) {
-      console.error('Analysis error:', error)
+      console.error('Analysis error:', error);
       return {
         sentiment: { label: 'NEUTRAL', confidence: 0.5 },
+        moderation: { verdict: 'safe', confidence: 0.9 },
         labels: [],
         message: 'Analysis unavailable'
-      }
-    }
-  }
-
-  async analyzePost(content: string, mediaFlags?: string[]): Promise<AnalysisResult> {
-    return this.analyzeContent(content)
-  }
-
-  async rewriteContent(content: string): Promise<{ rewritten_text: string }> {
-    try {
-      const response = await fetch(`${API_URL}/rewrite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: content })
-      })
-      
-      if (!response.ok) throw new Error('Rewrite failed')
-      return await response.json()
-    } catch (error) {
-      console.error('Rewrite error:', error)
-      throw error
-    }
-  }
-
-  async shortenContent(content: string): Promise<{ shortened_text: string }> {
-    try {
-      const response = await fetch(`${API_URL}/shorten`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: content })
-      })
-      
-      if (!response.ok) throw new Error('Shorten failed')
-      return await response.json()
-    } catch (error) {
-      console.error('Shorten error:', error)
-      throw error
-    }
-  }
-
-  async summarizeContent(content: string): Promise<{ summary: string }> {
-    try {
-      const response = await fetch(`${API_URL}/summarize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: content })
-      })
-      
-      if (!response.ok) throw new Error('Summarize failed')
-      return await response.json()
-    } catch (error) {
-      console.error('Summarize error:', error)
-      throw error
-    }
-  }
-
-  async summarizeThread(texts: string[], imageCounts?: number[], imageAlts?: string[]): Promise<{ summary: string }> {
-    try {
-      const response = await fetch(`${API_URL}/api/summarize-thread`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          texts,
-          image_counts: imageCounts,
-          image_alts: imageAlts
-        })
-      })
-      
-      if (!response.ok) throw new Error('Thread summarization failed')
-      return await response.json()
-    } catch (error) {
-      console.error('Thread summarization error:', error)
-      return { summary: texts[0]?.substring(0, 100) || 'Discussion' }
+      };
     }
   }
 
   async getSentimentOnly(content: string): Promise<{ sentiment: { label: string; confidence: number } }> {
     try {
-      const response = await fetch(`${API_URL}/sentiment`, {
+      const response = await fetch(`${API_URL}/api/sentiment-only`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: content })
-      })
-      
-      if (!response.ok) throw new Error('Sentiment analysis failed')
-      return await response.json()
+      });
+
+      if (!response.ok) throw new Error('Sentiment analysis failed');
+      return await response.json();
     } catch (error) {
-      console.error('Sentiment error:', error)
-      return {
-        sentiment: { label: 'NEUTRAL', confidence: 0.5 }
-      }
+      console.error('Sentiment error:', error);
+      return { sentiment: { label: 'NEUTRAL', confidence: 0.5 } };
     }
   }
 
@@ -144,13 +73,13 @@ class AIService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt })
-      })
-      
-      if (!response.ok) throw new Error('Draft generation failed')
-      return await response.json()
+      });
+
+      if (!response.ok) throw new Error('Draft generation failed');
+      return await response.json();
     } catch (error) {
-      console.error('Draft error:', error)
-      throw error
+      console.error('Draft error:', error);
+      throw error;
     }
   }
 
@@ -160,15 +89,31 @@ class AIService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text })
-      })
-      
-      if (!response.ok) throw new Error('Condense failed')
-      return await response.json()
+      });
+
+      if (!response.ok) throw new Error('Condense failed');
+      return await response.json();
     } catch (error) {
-      console.error('Condense error:', error)
-      throw error
+      console.error('Condense error:', error);
+      throw error;
+    }
+  }
+
+  async summarizeThread(texts: string[], imageCounts?: number[], imageAlts?: string[]): Promise<{ summary: string }> {
+    try {
+      const response = await fetch(`${API_URL}/api/summarize-thread`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts, image_counts: imageCounts, image_alts: imageAlts })
+      });
+
+      if (!response.ok) throw new Error('Thread summarization failed');
+      return await response.json();
+    } catch (error) {
+      console.error('Thread summarization error:', error);
+      return { summary: texts[0]?.substring(0, 100) + '...' || 'Discussion' };
     }
   }
 }
 
-export default new AIService()
+export default new AIService();

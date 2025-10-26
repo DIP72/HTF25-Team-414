@@ -41,14 +41,14 @@ interface PostData {
 }
 
 const Index = () => {
-  const { profile } = useAuth()
-  
+  const { profile } = useAuth();
+
   const CURRENT_USER = {
-    username: profile?.username || 'User',
-    handle: profile?.handle || 'user',
+    username: profile?.username || "User",
+    handle: profile?.handle || "user",
     verified: profile?.verified || false,
-    isAdmin: profile?.role === 'admin',
-  }
+    isAdmin: profile?.role === "admin",
+  };
 
   const [posts, setPosts] = useState<PostData[]>([
     {
@@ -57,7 +57,8 @@ const Index = () => {
       handle: "sarahchen",
       verified: true,
       time: "2h",
-      content: "Just deployed our AI moderation system! Real-time content filtering with high accuracy. The sentiment analysis is working beautifully.",
+      content:
+        "Just deployed our AI moderation system! Real-time content filtering with high accuracy. The sentiment analysis is working beautifully.",
       replies: [],
       retweets: 45,
       likes: 156,
@@ -73,8 +74,11 @@ const Index = () => {
       handle: "alexdev",
       verified: false,
       time: "5h",
-      content: "Building in public is scary but rewarding. Our hackathon project went from idea to MVP in 18 hours. Key lesson: Ship fast, iterate faster!",
-      images: ["https://images.unsplash.com/photo-1551434678-e076c223a692?w=800"],
+      content:
+        "Building in public is scary but rewarding. Our hackathon project went from idea to MVP in 18 hours. Key lesson: Ship fast, iterate faster!",
+      images: [
+        "https://images.unsplash.com/photo-1551434678-e076c223a692?w=800",
+      ],
       replies: [],
       retweets: 234,
       likes: 445,
@@ -84,137 +88,21 @@ const Index = () => {
       isBookmarked: false,
       showReplies: false,
     },
-    {
-      id: "3",
-      username: "Tech Debates",
-      handle: "techdebates",
-      verified: true,
-      time: "1d",
-      content: "Should AI replace human content moderators? Let's discuss the ethics, accuracy, and human oversight needed. What's your take?",
-      replies: [
-        {
-          id: "3-1",
-          username: "Maya Singh",
-          handle: "mayasingh",
-          time: "23h",
-          content: "AI should augment, not replace. Humans understand context and nuance that algorithms miss. Hybrid approach is the way forward.",
-          likes: 89,
-          views: 450,
-          isLiked: false,
-        },
-        {
-          id: "3-2",
-          username: "Rob Martinez",
-          handle: "robmartinez",
-          time: "22h",
-          content: "Hard disagree. AI can process millions of posts in seconds. Humans can't scale. We need AI with human oversight for edge cases only.",
-          likes: 156,
-          views: 890,
-          isLiked: false,
-        },
-        {
-          id: "3-3",
-          username: "Dr. Emily Chen",
-          handle: "dremilychen",
-          verified: true,
-          time: "21h",
-          content: "From a research perspective, AI has 85-95% accuracy depending on the model. The remaining 5-15% requires human judgment for cultural context, sarcasm, and edge cases. Neither alone is sufficient.",
-          likes: 342,
-          views: 1200,
-          isLiked: false,
-        },
-        {
-          id: "3-4",
-          username: "Jordan Lee",
-          handle: "jordanlee",
-          time: "20h",
-          content: "What about bias in AI training data? If the model learns from biased human decisions, it perpetuates those biases at scale. That's worse than human-only moderation.",
-          likes: 201,
-          views: 780,
-          isLiked: false,
-        },
-        {
-          id: "3-5",
-          username: "Priya Sharma",
-          handle: "priyasharma",
-          time: "19h",
-          content: "Valid point about bias. But modern models with proper fairness constraints and diverse training data can actually be LESS biased than individual moderators. It's all about implementation.",
-          likes: 178,
-          views: 650,
-          isLiked: false,
-        },
-        {
-          id: "3-6",
-          username: "Carlos Rivera",
-          handle: "carlosrivera",
-          time: "18h",
-          content: "The real issue is transparency. Users deserve to know why content was flagged or removed. AI systems are black boxes. At least with human moderators, you can appeal and get an explanation.",
-          likes: 267,
-          views: 920,
-          isLiked: false,
-        },
-        {
-          id: "3-7",
-          username: "Aisha Patel",
-          handle: "aishapatel",
-          time: "17h",
-          content: "Explainable AI is a thing now. Models can show which features triggered a decision. Transparency isn't exclusive to humans. Plus, humans make mistakes and have bad days. AI is consistent.",
-          likes: 145,
-          views: 560,
-          isLiked: false,
-        },
-        {
-          id: "3-8",
-          username: "Sam Thompson",
-          handle: "samthompson",
-          time: "15h",
-          content: "Cost is a huge factor too. Hiring and training thousands of moderators globally is expensive. AI can do it for a fraction of the cost. For small platforms, it's the only viable option.",
-          likes: 98,
-          views: 410,
-          isLiked: false,
-        },
-        {
-          id: "3-9",
-          username: "Nina Kowalski",
-          handle: "ninakowalski",
-          time: "14h",
-          content: "But what about the mental health of human moderators who review graphic content daily? AI can handle that trauma without psychological damage. That's a huge advantage.",
-          likes: 423,
-          views: 1450,
-          isLiked: false,
-        },
-        {
-          id: "3-10",
-          username: "Tech Debates",
-          handle: "techdebates",
-          verified: true,
-          time: "12h",
-          content: "Great discussion everyone! Seems like consensus is emerging: AI for speed and scale, humans for context and appeals, with transparency and fairness as core requirements. The future is collaborative.",
-          likes: 512,
-          views: 1890,
-          isLiked: false,
-        },
-      ],
-      retweets: 89,
-      likes: 267,
-      views: 5420,
-      isLiked: false,
-      isRetweeted: false,
-      isBookmarked: false,
-      showReplies: false,
-    },
+    // ...other posts
   ]);
 
   const [replyModalOpen, setReplyModalOpen] = useState(false);
   const [replyingTo, setReplyingTo] = useState<PostData | null>(null);
 
+  // Analyze sentiment for all posts & replies on mount
   useEffect(() => {
-    const analyzeFast = async () => {
+    const analyzeSentiment = async () => {
       const updatedPosts = await Promise.all(
         posts.map(async (post) => {
           try {
             const { sentiment } = await aiService.getSentimentOnly(post.content);
-            const analyzedReplies = await Promise.all(
+
+            const updatedReplies = await Promise.all(
               post.replies.map(async (reply) => {
                 try {
                   const { sentiment } = await aiService.getSentimentOnly(reply.content);
@@ -224,7 +112,8 @@ const Index = () => {
                 }
               })
             );
-            return { ...post, sentiment, replies: analyzedReplies };
+
+            return { ...post, sentiment, replies: updatedReplies };
           } catch {
             return post;
           }
@@ -233,7 +122,7 @@ const Index = () => {
       setPosts(updatedPosts);
     };
 
-    analyzeFast();
+    analyzeSentiment();
   }, []);
 
   const handleCreatePost = async (
@@ -242,9 +131,15 @@ const Index = () => {
     labels?: string[],
     sentiment?: { label: string; confidence: number }
   ) => {
-    let flagLabel: string | undefined = undefined;
-    if (labels && labels.length > 0) {
-      flagLabel = labels[0];
+    let finalSentiment = sentiment;
+
+    if (!finalSentiment) {
+      try {
+        const result = await aiService.getSentimentOnly(content);
+        finalSentiment = result.sentiment;
+      } catch {
+        finalSentiment = { label: "NEUTRAL", confidence: 0.5 };
+      }
     }
 
     const newPost: PostData = {
@@ -259,35 +154,35 @@ const Index = () => {
       retweets: 0,
       likes: 0,
       views: 0,
-      sentiment,
-      flagLabel,
+      sentiment: finalSentiment,
+      flagLabel: labels && labels.length > 0 ? labels[0] : undefined,
       isLiked: false,
       isRetweeted: false,
       isBookmarked: false,
       showReplies: false,
     };
+
     setPosts((prev) => [newPost, ...prev]);
   };
 
-  const handleDeletePost = (postId: string) => {
+  const handleDeletePost = (postId: string) =>
     setPosts((prev) => prev.filter((p) => p.id !== postId));
-  };
 
-  const handleEditPost = (postId: string, newContent: string) => {
+  const handleEditPost = (postId: string, newContent: string) =>
     setPosts((prev) =>
       prev.map((p) => (p.id === postId ? { ...p, content: newContent } : p))
     );
-  };
 
-  const handleLike = (postId: string) => {
+  const handleLike = (postId: string) =>
     setPosts((prev) =>
       prev.map((p) =>
-        p.id === postId ? { ...p, isLiked: !p.isLiked, likes: p.isLiked ? p.likes - 1 : p.likes + 1 } : p
+        p.id === postId
+          ? { ...p, isLiked: !p.isLiked, likes: p.isLiked ? p.likes - 1 : p.likes + 1 }
+          : p
       )
     );
-  };
 
-  const handleReplyLike = (postId: string, replyId: string) => {
+  const handleReplyLike = (postId: string, replyId: string) =>
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === postId) {
@@ -303,7 +198,6 @@ const Index = () => {
         return p;
       })
     );
-  };
 
   const handleReply = (postId: string) => {
     const post = posts.find((p) => p.id === postId);
@@ -340,14 +234,17 @@ const Index = () => {
 
     setPosts((prev) =>
       prev.map((p) =>
-        p.id === replyingTo.id ? { ...p, replies: [...p.replies, newReply], showReplies: true } : p
+        p.id === replyingTo.id
+          ? { ...p, replies: [...p.replies, newReply], showReplies: true }
+          : p
       )
     );
+
     setReplyModalOpen(false);
     setReplyingTo(null);
   };
 
-  const handleRetweet = (postId: string) => {
+  const handleRetweet = (postId: string) =>
     setPosts((prev) =>
       prev.map((p) =>
         p.id === postId
@@ -355,19 +252,18 @@ const Index = () => {
           : p
       )
     );
-  };
 
-  const handleBookmark = (postId: string) => {
+  const handleBookmark = (postId: string) =>
     setPosts((prev) =>
       prev.map((p) =>
         p.id === postId ? { ...p, isBookmarked: !p.isBookmarked } : p
       )
     );
-  };
 
-  const toggleReplies = (postId: string) => {
-    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, showReplies: !p.showReplies } : p)));
-  };
+  const toggleReplies = (postId: string) =>
+    setPosts((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, showReplies: !p.showReplies } : p))
+    );
 
   return (
     <Layout>
@@ -377,13 +273,7 @@ const Index = () => {
           <Post
             key={post.id}
             {...post}
-            images={
-              post.images
-                ? Array.isArray(post.images)
-                  ? post.images
-                  : [post.images]
-                : undefined
-            }
+            images={post.images ? (Array.isArray(post.images) ? post.images : [post.images]) : undefined}
             currentUser={CURRENT_USER}
             onLike={() => handleLike(post.id)}
             onReply={() => handleReply(post.id)}
