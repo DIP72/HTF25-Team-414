@@ -1,21 +1,10 @@
-// src/services/aiService.ts
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = "http://localhost:8000";
 
-async function postJSON<T>(path: string, body: any): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`API ${path} failed: ${res.status} ${text}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-export interface AnalyzePostResponse {
-  sentiment: { label: string; confidence: number };
+interface AnalysisResult {
+  sentiment: {
+    label: string;
+    confidence: number;
+  };
   moderation: {
     verdict: "safe" | "flagged" | "blocked";
     confidence: number;
@@ -26,31 +15,92 @@ export interface AnalyzePostResponse {
   review_flag: boolean;
 }
 
-export default {
-  analyzePost(text: string, media_flags?: string[]) {
-    return postJSON<AnalyzePostResponse>("/api/analyze-post", { text, media_flags });
-  },
+interface SentimentOnlyResult {
+  sentiment: {
+    label: string;
+    confidence: number;
+  };
+}
 
-  moderate(text: string, media_flags?: string[]) {
-    return postJSON<{
-      verdict: "safe" | "flagged" | "blocked";
-      confidence: number;
-      labels: string[];
-      reason: string;
-      raw_label: string;
-      review_flag: boolean;
-    }>("/api/moderate", { text, media_flags });
-  },
+interface SummarizeThreadRequest {
+  texts: string[];
+  image_counts?: number[];
+  image_alts?: string[];
+}
 
-  condenseToPost(text: string) {
-    return postJSON<{ draft: string }>("/api/condense-to-post", { text });
-  },
+interface SummarizeThreadResponse {
+  summary: string;
+}
 
-  summarizeThread(payload: { texts: string[]; image_counts?: number[]; image_alts?: string[] }) {
-    return postJSON<{ summary: string }>("/api/summarize-thread", payload);
-  },
+interface DraftPostResponse {
+  draft: string;
+  error?: string;
+}
 
-  draftPost(prompt: string) {
-    return postJSON<{ draft: string; error?: string }>("/api/draft-post", { prompt });
-  },
-};
+interface CondensePostResponse {
+  draft: string;
+}
+
+class AIService {
+  private async postJSON<T>(endpoint: string, data: any): Promise<T> {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async analyzePost(text: string, media_flags?: string[]): Promise<AnalysisResult> {
+    return this.postJSON<AnalysisResult>("/api/analyze-post", {
+      text,
+      media_flags: media_flags || [],
+    });
+  }
+
+  async getSentimentOnly(text: string): Promise<SentimentOnlyResult> {
+    return this.postJSON<SentimentOnlyResult>("/api/sentiment-only", { text });
+  }
+
+  async moderatePost(text: string, media_flags?: string[]) {
+    return this.postJSON("/api/moderate", {
+      text,
+      media_flags: media_flags || [],
+    });
+  }
+
+  async summarizeThread(request: SummarizeThreadRequest): Promise<SummarizeThreadResponse> {
+    return this.postJSON<SummarizeThreadResponse>("/api/summarize-thread", {
+      texts: request.texts,
+      image_counts: request.image_counts || [],
+      image_alts: request.image_alts || [],
+    });
+  }
+
+  async draftPost(prompt: string): Promise<DraftPostResponse> {
+    return this.postJSON<DraftPostResponse>("/api/draft-post", {
+      prompt,
+    });
+  }
+
+  async condenseToPost(text: string): Promise<CondensePostResponse> {
+    return this.postJSON<CondensePostResponse>("/api/condense-to-post", {
+      text,
+    });
+  }
+
+  async healthCheck() {
+    const response = await fetch(`${API_BASE}/health`);
+    return response.json();
+  }
+}
+
+const aiService = new AIService();
+export default aiService;

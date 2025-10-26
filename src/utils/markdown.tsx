@@ -1,96 +1,79 @@
+// src/utils/markdown.tsx (CREATE THIS FILE)
 import React from "react";
 
-export const parseMarkdown = (text: string): React.ReactNode[] => {
-  const parts: React.ReactNode[] = [];
-  const lines = text.split("\n");
-  let key = 0;
+export const parseMarkdown = (text: string): React.ReactNode => {
+  if (!text) return null;
 
-  // Inline formatting patterns
-  const inlinePatterns = [
-    { regex: /\*\*(.+?)\*\*/g, tag: "strong" }, // **bold**
-    { regex: /__(.+?)__/g, tag: "u" },          // __underline__
-    { regex: /\*(.+?)\*/g, tag: "em" },         // *italic*
-    { regex: /`(.+?)`/g, tag: "code" },         // `inline code`
-  ];
-
-  const parseInline = (str: string) => {
-    let remaining = str;
-    const inlineParts: React.ReactNode[] = [];
-    let k = 0;
-
-    while (remaining.length > 0) {
-      let earliest: { index: number; length: number; content: string; tag: string } | null = null;
-
-      for (const p of inlinePatterns) {
-        const match = p.regex.exec(remaining);
-        if (match && (!earliest || match.index < earliest.index)) {
-          earliest = { index: match.index, length: match[0].length, content: match[1], tag: p.tag };
-        }
-        p.regex.lastIndex = 0;
-      }
-
-      if (earliest) {
-        if (earliest.index > 0) inlineParts.push(<React.Fragment key={k++}>{remaining.substring(0, earliest.index)}</React.Fragment>);
-        const Tag = earliest.tag as keyof JSX.IntrinsicElements;
-        inlineParts.push(<Tag key={k++}>{earliest.content}</Tag>);
-        remaining = remaining.substring(earliest.index + earliest.length);
-      } else {
-        inlineParts.push(<React.Fragment key={k++}>{remaining}</React.Fragment>);
-        break;
-      }
+  // Split by line breaks but preserve them
+  const lines = text.split('\n');
+  
+  return lines.map((line, lineIdx) => {
+    if (!line.trim()) {
+      return <br key={lineIdx} />;
     }
 
-    return inlineParts;
-  };
+    // Process inline formatting
+    let parts: (string | React.ReactNode)[] = [line];
+    
+    // Bold: **text**
+    parts = parts.flatMap((part, idx) => {
+      if (typeof part !== 'string') return part;
+      const boldRegex = /\*\*(.+?)\*\*/g;
+      const matches = [...part.matchAll(boldRegex)];
+      if (matches.length === 0) return part;
+      
+      const result: (string | React.ReactNode)[] = [];
+      let lastIndex = 0;
+      matches.forEach((match, i) => {
+        result.push(part.slice(lastIndex, match.index));
+        result.push(<strong key={`${idx}-bold-${i}`}>{match[1]}</strong>);
+        lastIndex = (match.index || 0) + match[0].length;
+      });
+      result.push(part.slice(lastIndex));
+      return result;
+    });
 
-  let inList = false;
-  let listItems: React.ReactNode[] = [];
-  let orderedList = false;
+    // Italic: *text*
+    parts = parts.flatMap((part, idx) => {
+      if (typeof part !== 'string') return part;
+      const italicRegex = /(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g;
+      const matches = [...part.matchAll(italicRegex)];
+      if (matches.length === 0) return part;
+      
+      const result: (string | React.ReactNode)[] = [];
+      let lastIndex = 0;
+      matches.forEach((match, i) => {
+        result.push(part.slice(lastIndex, match.index));
+        result.push(<em key={`${idx}-italic-${i}`}>{match[1]}</em>);
+        lastIndex = (match.index || 0) + match[0].length;
+      });
+      result.push(part.slice(lastIndex));
+      return result;
+    });
 
-  const flushList = () => {
-    if (!inList) return;
-    const Tag = orderedList ? "ol" : "ul";
-    parts.push(<Tag key={key++} className="ml-4 mb-2 list-disc list-inside">{listItems}</Tag>);
-    listItems = [];
-    inList = false;
-    orderedList = false;
-  };
+    // Underline: __text__
+    parts = parts.flatMap((part, idx) => {
+      if (typeof part !== 'string') return part;
+      const underlineRegex = /__(.+?)__/g;
+      const matches = [...part.matchAll(underlineRegex)];
+      if (matches.length === 0) return part;
+      
+      const result: (string | React.ReactNode)[] = [];
+      let lastIndex = 0;
+      matches.forEach((match, i) => {
+        result.push(part.slice(lastIndex, match.index));
+        result.push(<u key={`${idx}-underline-${i}`}>{match[1]}</u>);
+        lastIndex = (match.index || 0) + match[0].length;
+      });
+      result.push(part.slice(lastIndex));
+      return result;
+    });
 
-  lines.forEach((line) => {
-    // Headers
-    const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
-    if (headerMatch) {
-      flushList();
-      const level = headerMatch[1].length;
-      const content = headerMatch[2];
-      const Tag = `h${level}` as keyof JSX.IntrinsicElements;
-      parts.push(<Tag key={key++}>{parseInline(content)}</Tag>);
-      return;
-    }
-
-    // Lists
-    const ulMatch = line.match(/^[-*]\s+(.+)$/);
-    const olMatch = line.match(/^(\d+)\.\s+(.+)$/);
-
-    if (ulMatch || olMatch) {
-      const content = ulMatch ? ulMatch[1] : olMatch![2];
-      if (!inList) {
-        inList = true;
-        orderedList = !!olMatch;
-      }
-      listItems.push(<li key={listItems.length}>{parseInline(content)}</li>);
-      return;
-    }
-
-    // Normal paragraph
-    flushList();
-    if (line.trim() === "") {
-      parts.push(<br key={key++} />);
-    } else {
-      parts.push(<p key={key++}>{parseInline(line)}</p>);
-    }
+    return (
+      <React.Fragment key={lineIdx}>
+        {parts}
+        {lineIdx < lines.length - 1 && <br />}
+      </React.Fragment>
+    );
   });
-
-  flushList();
-  return parts;
 };

@@ -1,4 +1,3 @@
-// src/pages/Index.tsx
 import { useState, useEffect } from "react";
 import Layout from "@/components/Layout";
 import Post from "@/components/Post";
@@ -40,6 +39,12 @@ interface PostData {
   showReplies?: boolean;
 }
 
+const CURRENT_USER = {
+  username: "Demo User",
+  handle: "demouser",
+  verified: false,
+};
+
 const Index = () => {
   const [posts, setPosts] = useState<PostData[]>([
     {
@@ -53,7 +58,6 @@ const Index = () => {
       retweets: 45,
       likes: 156,
       views: 3140,
-      sentiment: { label: "positive", confidence: 0.95 },
       isLiked: false,
       isRetweeted: false,
       isBookmarked: false,
@@ -71,7 +75,6 @@ const Index = () => {
       retweets: 234,
       likes: 445,
       views: 8920,
-      sentiment: { label: "positive", confidence: 0.89 },
       isLiked: false,
       isRetweeted: false,
       isBookmarked: false,
@@ -93,7 +96,7 @@ const Index = () => {
           content: "AI should augment, not replace. Humans understand context and nuance that algorithms miss. Hybrid approach is the way forward.",
           likes: 89,
           views: 450,
-          sentiment: { label: "neutral", confidence: 0.72 },
+          isLiked: false,
         },
         {
           id: "3-2",
@@ -103,7 +106,7 @@ const Index = () => {
           content: "Hard disagree. AI can process millions of posts in seconds. Humans can't scale. We need AI with human oversight for edge cases only.",
           likes: 156,
           views: 890,
-          sentiment: { label: "neutral", confidence: 0.68 },
+          isLiked: false,
         },
         {
           id: "3-3",
@@ -114,7 +117,7 @@ const Index = () => {
           content: "From a research perspective, AI has 85-95% accuracy depending on the model. The remaining 5-15% requires human judgment for cultural context, sarcasm, and edge cases. Neither alone is sufficient.",
           likes: 342,
           views: 1200,
-          sentiment: { label: "neutral", confidence: 0.81 },
+          isLiked: false,
         },
         {
           id: "3-4",
@@ -124,7 +127,7 @@ const Index = () => {
           content: "What about bias in AI training data? If the model learns from biased human decisions, it perpetuates those biases at scale. That's worse than human-only moderation.",
           likes: 201,
           views: 780,
-          sentiment: { label: "negative", confidence: 0.65 },
+          isLiked: false,
         },
         {
           id: "3-5",
@@ -134,7 +137,7 @@ const Index = () => {
           content: "Valid point about bias. But modern models with proper fairness constraints and diverse training data can actually be LESS biased than individual moderators. It's all about implementation.",
           likes: 178,
           views: 650,
-          sentiment: { label: "neutral", confidence: 0.74 },
+          isLiked: false,
         },
         {
           id: "3-6",
@@ -144,7 +147,7 @@ const Index = () => {
           content: "The real issue is transparency. Users deserve to know why content was flagged or removed. AI systems are black boxes. At least with human moderators, you can appeal and get an explanation.",
           likes: 267,
           views: 920,
-          sentiment: { label: "neutral", confidence: 0.70 },
+          isLiked: false,
         },
         {
           id: "3-7",
@@ -154,7 +157,7 @@ const Index = () => {
           content: "Explainable AI is a thing now. Models can show which features triggered a decision. Transparency isn't exclusive to humans. Plus, humans make mistakes and have bad days. AI is consistent.",
           likes: 145,
           views: 560,
-          sentiment: { label: "neutral", confidence: 0.76 },
+          isLiked: false,
         },
         {
           id: "3-8",
@@ -164,7 +167,7 @@ const Index = () => {
           content: "Cost is a huge factor too. Hiring and training thousands of moderators globally is expensive. AI can do it for a fraction of the cost. For small platforms, it's the only viable option.",
           likes: 98,
           views: 410,
-          sentiment: { label: "neutral", confidence: 0.71 },
+          isLiked: false,
         },
         {
           id: "3-9",
@@ -174,7 +177,7 @@ const Index = () => {
           content: "But what about the mental health of human moderators who review graphic content daily? AI can handle that trauma without psychological damage. That's a huge advantage.",
           likes: 423,
           views: 1450,
-          sentiment: { label: "positive", confidence: 0.79 },
+          isLiked: false,
         },
         {
           id: "3-10",
@@ -185,13 +188,12 @@ const Index = () => {
           content: "Great discussion everyone! Seems like consensus is emerging: AI for speed and scale, humans for context and appeals, with transparency and fairness as core requirements. The future is collaborative.",
           likes: 512,
           views: 1890,
-          sentiment: { label: "positive", confidence: 0.88 },
+          isLiked: false,
         },
       ],
       retweets: 89,
       likes: 267,
       views: 5420,
-      sentiment: { label: "neutral", confidence: 0.75 },
       isLiked: false,
       isRetweeted: false,
       isBookmarked: false,
@@ -202,59 +204,37 @@ const Index = () => {
   const [replyModalOpen, setReplyModalOpen] = useState(false);
   const [replyingTo, setReplyingTo] = useState<PostData | null>(null);
 
-  // AI sentiment analysis for posts and replies on mount
   useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        // Analyze posts
-        const updatedPosts = await Promise.all(
-          posts.map(async (p) => {
-            if (p.sentiment && p.sentiment.confidence > 0.5) return p;
-            try {
-              const res = await aiService.analyzePost(p.content);
-              return { ...p, sentiment: res.sentiment };
-            } catch {
-              return p;
-            }
-          })
-        );
-
-        // Analyze replies within posts
-        const postsWithAnalyzedReplies = await Promise.all(
-          updatedPosts.map(async (post) => {
-            if (post.replies.length === 0) return post;
-
+    const analyzeFast = async () => {
+      const updatedPosts = await Promise.all(
+        posts.map(async (post) => {
+          try {
+            const { sentiment } = await aiService.getSentimentOnly(post.content);
             const analyzedReplies = await Promise.all(
               post.replies.map(async (reply) => {
-                if (reply.sentiment && reply.sentiment.confidence > 0.5) return reply;
                 try {
-                  const res = await aiService.analyzePost(reply.content);
-                  return { ...reply, sentiment: res.sentiment };
+                  const { sentiment } = await aiService.getSentimentOnly(reply.content);
+                  return { ...reply, sentiment };
                 } catch {
                   return reply;
                 }
               })
             );
-
-            return { ...post, replies: analyzedReplies };
-          })
-        );
-
-        if (!cancelled) setPosts(postsWithAnalyzedReplies);
-      } catch {}
-    })();
-
-    return () => {
-      cancelled = true;
+            return { ...post, sentiment, replies: analyzedReplies };
+          } catch {
+            return post;
+          }
+        })
+      );
+      setPosts(updatedPosts);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    analyzeFast();
   }, []);
 
   const handleCreatePost = async (
     content: string,
-    image?: string,
+    images?: string[],
     labels?: string[],
     sentiment?: { label: string; confidence: number }
   ) => {
@@ -265,12 +245,12 @@ const Index = () => {
 
     const newPost: PostData = {
       id: Date.now().toString(),
-      username: "Your Name",
-      handle: "yourusername",
-      verified: false,
+      username: CURRENT_USER.username,
+      handle: CURRENT_USER.handle,
+      verified: CURRENT_USER.verified,
       time: "now",
       content,
-      images: image ? image : undefined,
+      images: images && images.length > 0 ? images : undefined,
       replies: [],
       retweets: 0,
       likes: 0,
@@ -293,6 +273,24 @@ const Index = () => {
     );
   };
 
+  const handleReplyLike = (postId: string, replyId: string) => {
+    setPosts((prev) =>
+      prev.map((p) => {
+        if (p.id === postId) {
+          return {
+            ...p,
+            replies: p.replies.map((r) =>
+              r.id === replyId
+                ? { ...r, isLiked: !r.isLiked, likes: r.isLiked ? r.likes - 1 : r.likes + 1 }
+                : r
+            ),
+          };
+        }
+        return p;
+      })
+    );
+  };
+
   const handleReply = (postId: string) => {
     const post = posts.find((p) => p.id === postId);
     if (post) {
@@ -301,25 +299,25 @@ const Index = () => {
     }
   };
 
-  const handleSubmitReply = async (content: string, image?: string) => {
+  const handleSubmitReply = async (content: string, images?: string[]) => {
     if (!replyingTo) return;
 
     let sentiment: { label: string; confidence: number } | undefined = undefined;
     try {
-      const res = await aiService.analyzePost(content);
+      const res = await aiService.getSentimentOnly(content);
       sentiment = res.sentiment;
     } catch {
-      sentiment = { label: "neutral", confidence: 0.5 };
+      sentiment = { label: "NEUTRAL", confidence: 0.5 };
     }
 
     const newReply: Reply = {
       id: Date.now().toString(),
-      username: "Your Name",
-      handle: "yourusername",
-      verified: false,
+      username: CURRENT_USER.username,
+      handle: CURRENT_USER.handle,
+      verified: CURRENT_USER.verified,
       time: "now",
       content,
-      images: image ? [image] : undefined,
+      images: images && images.length > 0 ? images : undefined,
       likes: 0,
       views: 0,
       isLiked: false,
@@ -359,7 +357,7 @@ const Index = () => {
 
   return (
     <Layout>
-      <CreateThread onPost={handleCreatePost} />
+      <CreateThread onPost={handleCreatePost} currentUser={CURRENT_USER} />
 
       <div>
         {posts.map((post) => (
@@ -378,6 +376,7 @@ const Index = () => {
             onRetweet={() => handleRetweet(post.id)}
             onBookmark={() => handleBookmark(post.id)}
             onToggleReplies={() => toggleReplies(post.id)}
+            onReplyLike={(replyId) => handleReplyLike(post.id, replyId)}
           />
         ))}
       </div>
@@ -389,6 +388,7 @@ const Index = () => {
             handle: replyingTo.handle,
             content: replyingTo.content,
           }}
+          currentUser={CURRENT_USER}
           onClose={() => setReplyModalOpen(false)}
           onSubmit={handleSubmitReply}
         />
