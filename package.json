@@ -1,6 +1,9 @@
 {
-  "name": "threadsai",
+  "name": "twine",
   "version": "1.0.0",
+  "engines": {
+    "node": "18.x"
+  },
   "scripts": {
     "dev": "vite --host",
     "frontend": "vite",
