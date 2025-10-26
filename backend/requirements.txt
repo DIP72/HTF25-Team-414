@@ -1,0 +1,17 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+requests>=2.32
+beautifulsoup4>=4.12
+readability-lxml>=0.8.1
+newspaper3k>=0.2.8
+trafilatura>=1.7
+feedparser>=6.0
+tenacity>=8.2
+
+# ML
+torch>=2.3     # or pin suitable CPU/Metal wheel
+transformers>=4.46
+accelerate>=1.2
+
+# Optional: if Tiny fallback is used
+sentencepiece>=0.2
