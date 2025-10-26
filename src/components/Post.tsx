@@ -13,16 +13,19 @@ import {
     Trash2,
     Edit3,
     Ban,
+    Loader2,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import aiService from "@/services/aiService";
+import { postsService } from "@/services/postsService";
 import { parseMarkdown } from "@/utils/markdown";
+import { toast } from "sonner";
 
 interface Reply {
     id: string;
     username: string;
     handle: string;
-    verified?: boolean;
+    role?: 'user' | 'admin' | 'verified';
     time: string;
     content: string;
     images?: string[];
@@ -36,18 +39,18 @@ interface PostProps {
     id?: string;
     username: string;
     handle: string;
-    verified?: boolean;
+    role?: 'user' | 'admin' | 'verified';
     time: string;
     content: string;
     images?: string[];
     replies: Reply[];
-    retweets: number;
+    reposts: number;  // ← Changed from retweets
     likes: number;
     views: number;
     sentiment?: { label: string; confidence: number };
     flagLabel?: string;
     isLiked?: boolean;
-    isRetweeted?: boolean;
+    isReposted?: boolean;  // ← Changed from isRetweeted
     isBookmarked?: boolean;
     showReplies?: boolean;
     currentUser: {
@@ -58,7 +61,7 @@ interface PostProps {
     };
     onLike?: () => void;
     onReply?: () => void;
-    onRetweet?: () => void;
+    onRepost?: () => void;  // ← Changed from onRetweet
     onBookmark?: () => void;
     onToggleReplies?: () => void;
     onReplyLike?: (replyId: string) => void;
@@ -66,28 +69,32 @@ interface PostProps {
     onEdit?: (newContent: string) => void;
 }
 
+const MIN_POST_CHARS = 20;
+const MAX_POST_CHARS = 1000;
+
 const Post = (props: PostProps) => {
     const {
+        id,
         username,
         handle,
-        verified,
+        role,  // ← Changed from verified
         time,
         content,
         images,
         replies,
-        retweets,
+        reposts,  // ← Changed from retweets
         likes,
         views,
         sentiment,
         flagLabel,
         isLiked = false,
-        isRetweeted = false,
+        isReposted = false,  // ← Changed from isRetweeted
         isBookmarked = false,
         showReplies = false,
         currentUser,
         onLike,
         onReply,
-        onRetweet,
+        onRepost,  // ← Changed from onRetweet
         onBookmark,
         onToggleReplies,
         onReplyLike,
@@ -102,31 +109,61 @@ const Post = (props: PostProps) => {
     const [showMenu, setShowMenu] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [editContent, setEditContent] = useState(content);
+    const [viewTracked, setViewTracked] = useState(false);
 
     const isOwnPost = currentUser.username === username && currentUser.handle === handle;
     const canModerate = currentUser.isAdmin || isOwnPost;
+    const showVerifiedBadge = role === 'verified' || role === 'admin';  // ← Changed
+
+    // Track views only once
+    useEffect(() => {
+        if (id && !viewTracked) {
+            postsService.incrementViews(id);
+            setViewTracked(true);
+        }
+    }, [id, viewTracked]);
 
     const openImageModal = (index: number) => {
         setCurrentImageIndex(index);
         setImageModalOpen(true);
     };
+
     const nextImage = () => {
         if (images) setCurrentImageIndex((p) => (p + 1) % images.length);
     };
+
     const prevImage = () => {
         if (images) setCurrentImageIndex((p) => (p - 1 + images.length) % images.length);
     };
 
     const summarizeThisThread = async () => {
         if (isSummarizing) return;
+        
+        if (replies.length === 0 && content.length < 100) {
+            toast.info("Post is too short to summarize");
+            return;
+        }
+        
         setIsSummarizing(true);
         try {
             const texts = [content, ...replies.map((r) => r.content)];
             const image_counts = [(images?.length ?? 0), ...replies.map((r) => r.images?.length ?? 0)];
+            
+            console.log('Calling summarizeThread with:', { texts, image_counts });
             const { summary } = await aiService.summarizeThread(texts, image_counts);
-            setThreadSummary(summary || "");
-        } catch {
-            setThreadSummary("Summary unavailable");
+            console.log('Got summary:', summary);
+            
+            if (summary && summary.length >= 20) {
+                setThreadSummary(summary);
+                toast.success("Thread summarized");
+            } else {
+                toast.warning("Summary too short");
+                setThreadSummary(null);
+            }
+        } catch (error: any) {
+            console.error("Summary failed:", error);
+            toast.error(`Failed to summarize: ${error.message || 'Unknown error'}`);
+            setThreadSummary(null);
         } finally {
             setIsSummarizing(false);
         }
@@ -137,9 +174,27 @@ const Post = (props: PostProps) => {
         setShowMenu(false);
     };
 
-    const handleSaveEdit = () => {
-        if (editContent.trim() && onEdit) {
-            onEdit(editContent.trim());
+    const handleSaveEdit = async () => {
+        const trimmed = editContent.trim();
+        
+        if (trimmed.length < MIN_POST_CHARS) {
+            toast.error(`Post must be at least ${MIN_POST_CHARS} characters`);
+            return;
+        }
+        
+        if (trimmed.length > MAX_POST_CHARS) {
+            toast.error(`Post is too long`);
+            return;
+        }
+        
+        if (trimmed === content) {
+            toast.info("No changes made");
+            setIsEditing(false);
+            return;
+        }
+        
+        if (onEdit) {
+            onEdit(trimmed);
             setIsEditing(false);
         }
     };
@@ -156,31 +211,52 @@ const Post = (props: PostProps) => {
         setShowMenu(false);
     };
 
-    // Normalize many possible sentiment label formats to one of 'positive' | 'negative' | 'neutral'
     const normalizeSentiment = (label?: string): "positive" | "negative" | "neutral" => {
         if (!label) return "neutral";
         const l = String(label).toLowerCase().trim();
-        // common variants from different models/pipelines
         if (l.includes("pos") || l === "1" || l.includes("label_2") || l === "label2") return "positive";
         if (l.includes("neg") || l === "0" || l.includes("label_0") || l === "label0") return "negative";
-        // numeric probabilities like '0.78' are not labels; fallback to neutral
         return "neutral";
+    };
+
+    const getSentimentBadge = (sentiment?: { label: string; confidence: number }) => {
+        if (!sentiment) return null;
+
+        const normalized = normalizeSentiment(sentiment.label);
+        const colorClass =
+            normalized === "positive"
+                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                : normalized === "negative"
+                ? "bg-rose-50 text-rose-700 border-rose-200"
+                : "bg-slate-50 text-slate-600 border-slate-200";
+        
+        const displayLabel = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+        const confidence = Math.round((sentiment.confidence ?? 0) * 100);
+
+        return (
+            <span className={`inline-flex items-center gap-1 text-[10px] sm:text-[11px] px-2 sm:px-2.5 py-0.5 rounded-full font-medium border whitespace-nowrap ${colorClass}`}>
+                {displayLabel} • {confidence}%
+            </span>
+        );
     };
 
     return (
         <div className="mb-4">
-            <article className="bg-gray-50 rounded-2xl p-3 sm:p-4 hover:bg-gray-100 transition-colors duration-200">
+            <article className="bg-white rounded-2xl p-3 sm:p-4 border border-gray-200 hover:border-gray-300 transition-all duration-200">
                 <div className="flex gap-2 sm:gap-3">
                     <div className="relative flex-shrink-0">
                         <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-gray-300 flex items-center justify-center">
                             <User className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" strokeWidth={2} />
                         </div>
                     </div>
+                    
                     <div className="flex-1 min-w-0">
                         <div className="mb-1">
                             <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                                <span className="font-bold text-sm sm:text-[15px] text-gray-900 hover:underline cursor-pointer truncate">{username}</span>
-                                {verified && (
+                                <span className="font-bold text-sm sm:text-[15px] text-gray-900 hover:underline cursor-pointer truncate">
+                                    {username}
+                                </span>
+                                {showVerifiedBadge && (
                                     <svg width="16" height="16" viewBox="0 0 22 22" className="text-blue-500 flex-shrink-0">
                                         <path
                                             fill="currentColor"
@@ -196,66 +272,58 @@ const Post = (props: PostProps) => {
                                     <div className="ml-auto relative">
                                         <button 
                                             onClick={() => setShowMenu(!showMenu)}
-                                            className="text-gray-500 hover:bg-gray-200 hover:text-gray-900 rounded-full p-1.5 sm:p-2 transition-all duration-200"
+                                            className="text-gray-500 hover:bg-gray-100 hover:text-gray-900 rounded-full p-1.5 sm:p-2 transition-all duration-200"
                                         >
                                             <MoreHorizontal className="w-4 h-4 sm:w-5 sm:h-5" />
                                         </button>
                                         
                                         {showMenu && (
-                                            <div className="absolute right-0 top-full mt-1 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[160px] z-20">
-                                                {isOwnPost && (
+                                            <>
+                                                <div 
+                                                    className="fixed inset-0 z-10" 
+                                                    onClick={() => setShowMenu(false)}
+                                                />
+                                                <div className="absolute right-0 top-full mt-1 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[160px] z-20">
+                                                    {isOwnPost && (
+                                                        <button
+                                                            onClick={handleEdit}
+                                                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-gray-700"
+                                                        >
+                                                            <Edit3 className="w-4 h-4" />
+                                                            Edit
+                                                        </button>
+                                                    )}
                                                     <button
-                                                        onClick={handleEdit}
-                                                        className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-gray-700"
-                                                    >
-                                                        <Edit3 className="w-4 h-4" />
-                                                        Edit
-                                                    </button>
-                                                )}
-                                                <button
-                                                    onClick={handleDelete}
-                                                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-red-600"
-                                                >
-                                                    <Trash2 className="w-4 h-4" />
-                                                    Delete
-                                                </button>
-                                                {currentUser.isAdmin && !isOwnPost && (
-                                                    <button
-                                                        onClick={() => {
-                                                            alert("User blocked");
-                                                            setShowMenu(false);
-                                                        }}
+                                                        onClick={handleDelete}
                                                         className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-red-600"
                                                     >
-                                                        <Ban className="w-4 h-4" />
-                                                        Block User
+                                                        <Trash2 className="w-4 h-4" />
+                                                        Delete
                                                     </button>
-                                                )}
-                                            </div>
+                                                    {currentUser.isAdmin && !isOwnPost && (
+                                                        <button
+                                                            onClick={() => {
+                                                                toast.success("User blocked");
+                                                                setShowMenu(false);
+                                                            }}
+                                                            className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 transition-colors flex items-center gap-2.5 text-red-600"
+                                                        >
+                                                            <Ban className="w-4 h-4" />
+                                                            Block User
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </>
                                         )}
                                     </div>
                                 )}
                             </div>
+                            
                             {(sentiment || flagLabel) && (
-                                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                    {sentiment && (() => {
-                                        const s = normalizeSentiment(sentiment.label);
-                                        const colorClass =
-                                            s === "positive"
-                                                ? "bg-green-100 text-green-700"
-                                                : s === "negative"
-                                                ? "bg-red-100 text-red-700"
-                                                : "bg-gray-100 text-gray-700";
-                                        const displayLabel = s.charAt(0).toUpperCase() + s.slice(1);
-                                        const confidence = Math.round((sentiment.confidence ?? 0) * 100);
-                                        return (
-                                            <span className={`text-[10px] sm:text-[11px] px-2 sm:px-2.5 py-0.5 rounded-full font-medium whitespace-nowrap ${colorClass}`}>
-                                                {displayLabel} • {confidence}%
-                                            </span>
-                                        );
-                                    })()}
+                                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                    {getSentimentBadge(sentiment)}
                                     {flagLabel && (
-                                        <span className="text-[10px] sm:text-[11px] px-2 sm:px-2.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700 whitespace-nowrap">
+                                        <span className="text-[10px] sm:text-[11px] px-2 sm:px-2.5 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
                                             {flagLabel}
                                         </span>
                                     )}
@@ -268,35 +336,50 @@ const Post = (props: PostProps) => {
                                 <textarea
                                     value={editContent}
                                     onChange={(e) => setEditContent(e.target.value)}
-                                    className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm resize-none min-h-[100px] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="w-full bg-white border border-gray-300 rounded-lg p-3 text-sm resize-none min-h-[120px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    placeholder={`Min ${MIN_POST_CHARS} characters`}
                                 />
-                                <div className="flex gap-2 mt-2">
-                                    <button
-                                        onClick={handleSaveEdit}
-                                        className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
-                                    >
-                                        Save
-                                    </button>
-                                    <button
-                                        onClick={handleCancelEdit}
-                                        className="px-4 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition-colors"
-                                    >
-                                        Cancel
-                                    </button>
+                                <div className="flex items-center justify-between mt-2">
+                                    <span className={`text-xs ${editContent.trim().length < MIN_POST_CHARS ? 'text-red-600' : 'text-gray-500'}`}>
+                                        {editContent.trim().length}/{MAX_POST_CHARS}
+                                    </span>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={handleCancelEdit}
+                                            className="px-4 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition-colors"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleSaveEdit}
+                                            disabled={editContent.trim().length < MIN_POST_CHARS}
+                                            className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                        >
+                                            Save
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         ) : (
-                            <div className="text-sm sm:text-[15px] text-gray-900 mb-2 sm:mb-3 leading-normal break-words whitespace-pre-wrap">
+                            <div className="text-sm sm:text-[15px] text-gray-900 mb-2 sm:mb-3 leading-relaxed break-words whitespace-pre-wrap">
                                 {parseMarkdown(content)}
                             </div>
                         )}
                         
                         {threadSummary && (
-                            <div className="mb-2 sm:mb-3">
-                                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl px-4 py-3 shadow-sm">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <Sparkles className="w-4 h-4 text-blue-600" />
-                                        <span className="text-xs font-semibold text-blue-900">AI Summary</span>
+                            <div className="mb-3">
+                                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl px-4 py-3 shadow-sm">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center gap-2">
+                                            <Sparkles className="w-4 h-4 text-blue-600" />
+                                            <span className="text-xs font-semibold text-blue-900">AI Summary</span>
+                                        </div>
+                                        <button
+                                            onClick={() => setThreadSummary(null)}
+                                            className="text-blue-600 hover:text-blue-800"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
                                     </div>
                                     <div className="text-[13px] sm:text-sm leading-relaxed text-gray-800 break-words">
                                         {parseMarkdown(threadSummary)}
@@ -304,12 +387,15 @@ const Post = (props: PostProps) => {
                                 </div>
                             </div>
                         )}
+                        
                         {images && images.length > 0 && (
-                            <div className={`mb-2 sm:mb-3 rounded-2xl overflow-hidden cursor-pointer ${images.length === 1 ? "grid grid-cols-1" : "grid grid-cols-2 gap-1 sm:gap-2"}`}>
+                            <div className={`mb-2 sm:mb-3 rounded-2xl overflow-hidden ${
+                                images.length === 1 ? "grid grid-cols-1" : "grid grid-cols-2 gap-1 sm:gap-2"
+                            }`}>
                                 {images.map((img, idx) => (
                                     <div
                                         key={idx}
-                                        className={`relative overflow-hidden bg-gray-200 rounded-lg sm:rounded-xl hover:opacity-90 transition-opacity ${
+                                        className={`relative overflow-hidden bg-gray-200 rounded-lg sm:rounded-xl cursor-pointer hover:opacity-90 transition-opacity ${
                                             images.length === 1
                                                 ? "aspect-video"
                                                 : images.length === 3 && idx === 0
@@ -320,7 +406,7 @@ const Post = (props: PostProps) => {
                                     >
                                         <img src={img} alt="" className="w-full h-full object-cover" />
                                         {images.length > 1 && (
-                                            <div className="absolute top-1 right-1 sm:top-2 sm:right-2 bg-black/60 text-white text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full">
+                                            <div className="absolute top-1 right-1 sm:top-2 sm:right-2 bg-black/60 text-white text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full backdrop-blur-sm">
                                                 {idx + 1}/{images.length}
                                             </div>
                                         )}
@@ -328,111 +414,125 @@ const Post = (props: PostProps) => {
                                 ))}
                             </div>
                         )}
+                        
                         <div className="flex items-center justify-between mt-2 sm:mt-3">
                             <div className="flex items-center gap-1 sm:gap-2">
-                                <button onClick={onReply} className="group flex items-center gap-0.5 sm:gap-1 text-gray-500 hover:text-gray-900 transition-colors">
-                                    <div className="p-1.5 sm:p-2 rounded-full group-hover:bg-gray-200 transition-colors">
+                                <button onClick={onReply} className="group flex items-center gap-0.5 sm:gap-1 text-gray-500 hover:text-blue-600 transition-colors">
+                                    <div className="p-1.5 sm:p-2 rounded-full group-hover:bg-blue-50 transition-colors">
                                         <MessageCircle className="w-4 h-4 sm:w-5 sm:h-5" strokeWidth={2} />
                                     </div>
                                     <span className="text-xs sm:text-sm">{replies.length}</span>
                                 </button>
-                                <button onClick={onRetweet} className={`group flex items-center gap-0.5 sm:gap-1 transition-colors ${isRetweeted ? "text-green-600" : "text-gray-500 hover:text-gray-900"}`}>
-                                    <div className={`p-1.5 sm:p-2 rounded-full transition-colors ${isRetweeted ? "bg-green-50" : "group-hover:bg-gray-200"}`}>
+                                <button onClick={onRepost} className={`group flex items-center gap-0.5 sm:gap-1 transition-colors ${isReposted ? "text-green-600" : "text-gray-500 hover:text-green-600"}`}>
+                                    <div className={`p-1.5 sm:p-2 rounded-full transition-colors ${isReposted ? "bg-green-50" : "group-hover:bg-green-50"}`}>
                                         <Repeat2 className="w-4 h-4 sm:w-5 sm:h-5" strokeWidth={2} />
                                     </div>
-                                    <span className="text-xs sm:text-sm">{retweets}</span>
+                                    <span className="text-xs sm:text-sm">{reposts}</span>
                                 </button>
-                                <button onClick={onLike} className={`group flex items-center gap-0.5 sm:gap-1 transition-colors ${isLiked ? "text-pink-600" : "text-gray-500 hover:text-gray-900"}`}>
-                                    <div className={`p-1.5 sm:p-2 rounded-full transition-colors ${isLiked ? "bg-pink-50" : "group-hover:bg-gray-200"}`}>
+                                <button onClick={onLike} className={`group flex items-center gap-0.5 sm:gap-1 transition-colors ${isLiked ? "text-pink-600" : "text-gray-500 hover:text-pink-600"}`}>
+                                    <div className={`p-1.5 sm:p-2 rounded-full transition-colors ${isLiked ? "bg-pink-50" : "group-hover:bg-pink-50"}`}>
                                         <Heart className={`w-4 h-4 sm:w-5 sm:h-5 ${isLiked ? "fill-current" : ""}`} strokeWidth={2} />
                                     </div>
                                     <span className="text-xs sm:text-sm">{likes}</span>
                                 </button>
                                 <button className="group flex items-center gap-0.5 sm:gap-1 text-gray-500 hover:text-gray-900 transition-colors">
-                                    <div className="p-1.5 sm:p-2 rounded-full group-hover:bg-gray-200 transition-colors">
+                                    <div className="p-1.5 sm:p-2 rounded-full group-hover:bg-gray-100 transition-colors">
                                         <BarChart className="w-4 h-4 sm:w-5 sm:h-5" strokeWidth={2} />
                                     </div>
                                     <span className="text-xs sm:text-sm">{views}</span>
                                 </button>
                             </div>
+                            
                             <div className="flex items-center gap-1">
-                                <button onClick={summarizeThisThread} disabled={isSummarizing} className="group flex items-center gap-1 text-blue-600 hover:bg-blue-50 rounded-full px-2 sm:px-3 py-1 transition disabled:opacity-50 disabled:cursor-not-allowed" title="Summarize this thread">
-                                    <Sparkles className={`w-3 h-3 sm:w-4 sm:h-4 ${isSummarizing ? "animate-pulse" : ""}`} />
-                                    <span className="text-[10px] sm:text-xs font-semibold hidden sm:inline">{isSummarizing ? "Summarizing..." : "Summarize"}</span>
+                                <button 
+                                    onClick={summarizeThisThread} 
+                                    disabled={isSummarizing} 
+                                    className="group flex items-center gap-1 text-blue-600 hover:bg-blue-50 rounded-full px-2 sm:px-3 py-1.5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title={isSummarizing ? "Summarizing..." : "Summarize thread"}
+                                >
+                                    {isSummarizing ? (
+                                        <Loader2 className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
+                                    ) : (
+                                        <Sparkles className="w-3 h-3 sm:w-4 sm:h-4" />
+                                    )}
+                                    <span className="text-[10px] sm:text-xs font-semibold hidden sm:inline">
+                                        {isSummarizing ? "..." : "Summarize"}
+                                    </span>
                                 </button>
-                                <button onClick={onBookmark} className={`group transition-colors ${isBookmarked ? "text-blue-600" : "text-gray-500 hover:text-gray-900"}`} title={isBookmarked ? "Remove bookmark" : "Bookmark"}>
-                                    <div className={`p-2 rounded-full transition-colors ${isBookmarked ? "bg-blue-50" : "group-hover:bg-gray-200"}`}>
-                                        <Bookmark className={`w-5 h-5 ${isBookmarked ? "fill-current" : ""}`} strokeWidth={2} />
+                                <button 
+                                    onClick={onBookmark} 
+                                    className={`group transition-colors ${isBookmarked ? "text-blue-600" : "text-gray-500 hover:text-blue-600"}`}
+                                    title={isBookmarked ? "Remove bookmark" : "Bookmark"}
+                                >
+                                    <div className={`p-2 rounded-full transition-colors ${isBookmarked ? "bg-blue-50" : "group-hover:bg-blue-50"}`}>
+                                        <Bookmark className={`w-4 h-4 sm:w-5 sm:h-5 ${isBookmarked ? "fill-current" : ""}`} strokeWidth={2} />
                                     </div>
                                 </button>
                             </div>
                         </div>
+                        
                         {replies.length > 0 && (
                             <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-gray-200">
-                                <button onClick={onToggleReplies} className="text-xs sm:text-sm text-blue-600 hover:underline font-medium mb-2 sm:mb-3">
+                                <button 
+                                    onClick={onToggleReplies} 
+                                    className="text-xs sm:text-sm text-blue-600 hover:underline font-medium mb-2 sm:mb-3"
+                                >
                                     {showReplies ? `Hide ${replies.length} ${replies.length === 1 ? "reply" : "replies"}` : `View ${replies.length} ${replies.length === 1 ? "reply" : "replies"}`}
                                 </button>
+                                
                                 {showReplies && (
                                     <div className="space-y-3 sm:space-y-4 mt-2 sm:mt-3">
-                                        {replies.map((reply) => (
-                                            <div key={reply.id} className="bg-gray-100 rounded-xl p-3 border border-gray-200 hover:border-gray-300 transition-colors">
-                                                <div className="flex gap-2 sm:gap-3">
-                                                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gray-300 flex items-center justify-center flex-shrink-0">
-                                                        <User className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-600" strokeWidth={2} />
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
-                                                            <span className="font-bold text-xs sm:text-sm text-gray-900 truncate">{reply.username}</span>
-                                                            {reply.verified && (
-                                                                <svg width="14" height="14" viewBox="0 0 22 22" className="text-blue-500 flex-shrink-0">
-                                                                    <path fill="currentColor" d="M20.396 11c-.018-.646-.215-1.275-.57-1.816-.354-.54-.852-.972-1.438-1.246.223-.607.27-1.264.14-1.897-.131-.634-.437-1.218-.882-1.687-.47-.445-1.053-.75-1.687-.882-.633-.13-1.29-.083-1.897.14-.273-.587-.704-1.086-1.245-1.44S11.647 1.62 11 1.604c-.646.017-1.273.213-1.813.568s-.969.854-1.24 1.44c-.608-.223-1.267-.272-1.902-.14-.635.13-1.22.436-1.69.882-.445.47-.749 1.055-.878 1.688-.13.633-.08 1.29.144 1.896-.587.274-1.087.705-1.443 1.245-.356.54-.555 1.17-.574 1.817.02.647.218 1.276.574 1.817.356.54.856.972 1.443 1.245-.224.606-.274 1.263-.144 1.896.13.634.433 1.218.877 1.688.47.443 1.054.747 1.687.878.633.132 1.29.084 1.897-.136.274.586.705 1.084 1.246 1.439.54.354 1.17.551 1.816.569.647-.016 1.276-.213 1.817-.567s.972-.854 1.245-1.44c.604.239 1.266.296 1.903.164.636-.132 1.22-.447 1.68-.907.46-.46.776-1.044.908-1.681s.075-1.299-.165-1.903c.586-.274 1.084-.705 1.439-1.246.354-.54.551-1.17.569-1.816zM9.662 14.85l-3.429-3.428 1.293-1.302 2.072 2.072 4.4-4.794 1.347 1.246z"/>
-                                                                </svg>
-                                                            )}
-                                                            <span className="text-xs sm:text-sm text-gray-500 truncate">@{reply.handle}</span>
-                                                            <span className="text-gray-500 hidden sm:inline">·</span>
-                                                            <span className="text-xs sm:text-sm text-gray-500">{reply.time}</span>
-                                                            {reply.sentiment && (() => {
-                                                                const s = normalizeSentiment(reply.sentiment?.label);
-                                                                const badgeClass =
-                                                                    s === 'positive' ? 'bg-green-100 text-green-700'
-                                                                    : s === 'negative' ? 'bg-red-100 text-red-700'
-                                                                    : 'bg-gray-200 text-gray-700';
-                                                                const display = s.charAt(0).toUpperCase() + s.slice(1);
-                                                                const conf = Math.round((reply.sentiment?.confidence ?? 0) * 100);
-                                                                return (
-                                                                    <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap ml-auto ${badgeClass}`}>
-                                                                        {display} • {conf}%
-                                                                    </span>
-                                                                );
-                                                            })()}
+                                        {replies.map((reply) => {
+                                            const showReplyBadge = reply.role === 'verified' || reply.role === 'admin';
+                                            return (
+                                                <div key={reply.id} className="bg-gray-50 rounded-xl p-3 border border-gray-200 hover:bg-gray-100 transition-colors">
+                                                    <div className="flex gap-2 sm:gap-3">
+                                                        <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gray-300 flex items-center justify-center flex-shrink-0">
+                                                            <User className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-600" strokeWidth={2} />
                                                         </div>
-                                                        <div className="text-xs sm:text-sm text-gray-900 mb-2 break-words whitespace-pre-wrap leading-relaxed">
-                                                            {parseMarkdown(reply.content)}
-                                                        </div>
-                                                        {reply.images && reply.images.length > 0 && (
-                                                            <div className="mb-2 rounded-lg overflow-hidden">
-                                                                <img src={reply.images[0]} alt="" className="w-full max-h-64 object-cover rounded-lg" />
-                                                            </div>
-                                                        )}
-                                                        <div className="flex items-center gap-2 text-gray-500">
-                                                            <button 
-                                                                onClick={() => onReplyLike?.(reply.id)}
-                                                                className={`group flex items-center gap-1 transition-colors ${reply.isLiked ? "text-pink-600" : "hover:text-pink-600"}`}
-                                                            >
-                                                                <div className={`p-1.5 rounded-full transition-colors ${reply.isLiked ? "bg-pink-50" : "group-hover:bg-pink-50"}`}>
-                                                                    <Heart className={`w-3.5 h-3.5 ${reply.isLiked ? "fill-current" : ""}`} strokeWidth={2} />
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
+                                                                <span className="font-bold text-xs sm:text-sm text-gray-900 truncate">{reply.username}</span>
+                                                                {showReplyBadge && (
+                                                                    <svg width="14" height="14" viewBox="0 0 22 22" className="text-blue-500 flex-shrink-0">
+                                                                        <path fill="currentColor" d="M20.396 11c-.018-.646-.215-1.275-.57-1.816-.354-.54-.852-.972-1.438-1.246.223-.607.27-1.264.14-1.897-.131-.634-.437-1.218-.882-1.687-.47-.445-1.053-.75-1.687-.882-.633-.13-1.29-.083-1.897.14-.273-.587-.704-1.086-1.245-1.44S11.647 1.62 11 1.604c-.646.017-1.273.213-1.813.568s-.969.854-1.24 1.44c-.608-.223-1.267-.272-1.902-.14-.635.13-1.22.436-1.69.882-.445.47-.749 1.055-.878 1.688-.13.633-.08 1.29.144 1.896-.587.274-1.087.705-1.443 1.245-.356.54-.555 1.17-.574 1.817.02.647.218 1.276.574 1.817.356.54.856.972 1.443 1.245-.224.606-.274 1.263-.144 1.896.13.634.433 1.218.877 1.688.47.443 1.054.747 1.687.878.633.132 1.29.084 1.897-.136.274.586.705 1.084 1.246 1.439.54.354 1.17.551 1.816.569.647-.016 1.276-.213 1.817-.567s.972-.854 1.245-1.44c.604.239 1.266.296 1.903.164.636-.132 1.22-.447 1.68-.907.46-.46.776-1.044.908-1.681s.075-1.299-.165-1.903c.586-.274 1.084-.705 1.439-1.246.354-.54.551-1.17.569-1.816zM9.662 14.85l-3.429-3.428 1.293-1.302 2.072 2.072 4.4-4.794 1.347 1.246z"/>
+                                                                    </svg>
+                                                                )}
+                                                                <span className="text-xs sm:text-sm text-gray-500 truncate">@{reply.handle}</span>
+                                                                <span className="text-gray-500 hidden sm:inline">·</span>
+                                                                <span className="text-xs sm:text-sm text-gray-500">{reply.time}</span>
+                                                                <div className="ml-auto">
+                                                                    {getSentimentBadge(reply.sentiment)}
                                                                 </div>
-                                                                <span className="text-xs">{reply.likes}</span>
-                                                            </button>
-                                                            <div className="flex items-center gap-1">
-                                                                <BarChart className="w-3.5 h-3.5" strokeWidth={2} />
-                                                                <span className="text-xs">{reply.views}</span>
+                                                            </div>
+                                                            <div className="text-xs sm:text-sm text-gray-900 mb-2 break-words whitespace-pre-wrap leading-relaxed">
+                                                                {parseMarkdown(reply.content)}
+                                                            </div>
+                                                            {reply.images && reply.images.length > 0 && (
+                                                                <div className="mb-2 rounded-lg overflow-hidden">
+                                                                    <img src={reply.images[0]} alt="" className="w-full max-h-64 object-cover rounded-lg" />
+                                                                </div>
+                                                            )}
+                                                            <div className="flex items-center gap-3 text-gray-500">
+                                                                <button 
+                                                                    onClick={() => onReplyLike?.(reply.id)}
+                                                                    className={`group flex items-center gap-1 transition-colors ${reply.isLiked ? "text-pink-600" : "hover:text-pink-600"}`}
+                                                                >
+                                                                    <div className={`p-1.5 rounded-full transition-colors ${reply.isLiked ? "bg-pink-50" : "group-hover:bg-pink-50"}`}>
+                                                                        <Heart className={`w-3.5 h-3.5 ${reply.isLiked ? "fill-current" : ""}`} strokeWidth={2} />
+                                                                    </div>
+                                                                    <span className="text-xs">{reply.likes}</span>
+                                                                </button>
+                                                                <div className="flex items-center gap-1">
+                                                                    <BarChart className="w-3.5 h-3.5" strokeWidth={2} />
+                                                                    <span className="text-xs">{reply.views}</span>
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </div>
@@ -442,21 +542,30 @@ const Post = (props: PostProps) => {
             </article>
 
             {imageModalOpen && images && (
-                <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-2 sm:p-4" onClick={() => setImageModalOpen(false)}>
-                    <button onClick={() => setImageModalOpen(false)} className="absolute top-2 right-2 sm:top-4 sm:right-4 text-white hover:bg-white/20 rounded-full p-1.5 sm:p-2 transition-colors z-10">
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-2 sm:p-4" onClick={() => setImageModalOpen(false)}>
+                    <button 
+                        onClick={() => setImageModalOpen(false)} 
+                        className="absolute top-2 right-2 sm:top-4 sm:right-4 text-white hover:bg-white/20 rounded-full p-1.5 sm:p-2 transition-colors z-10"
+                    >
                         <X className="w-5 h-5 sm:w-6 sm:h-6" />
                     </button>
-                    <div className="relative max-w-4xl max-h-[90vh] w-full" onClick={(e) => e.stopPropagation()}>
+                    <div className="relative max-w-5xl max-h-[90vh] w-full" onClick={(e) => e.stopPropagation()}>
                         <img src={images[currentImageIndex]} alt="" className="w-full h-full object-contain rounded-lg" />
                         {images.length > 1 && (
                             <>
-                                <button onClick={prevImage} className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 sm:p-3 transition-colors">
+                                <button 
+                                    onClick={prevImage} 
+                                    className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 sm:p-3 transition-colors backdrop-blur-sm"
+                                >
                                     <ChevronLeft className="w-5 h-5 sm:w-6 sm:h-6" />
                                 </button>
-                                <button onClick={nextImage} className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 sm:p-3 transition-colors">
+                                <button 
+                                    onClick={nextImage} 
+                                    className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 sm:p-3 transition-colors backdrop-blur-sm"
+                                >
                                     <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
                                 </button>
-                                <div className="absolute bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 bg-black/60 text-white text-xs sm:text-sm px-3 sm:px-4 py-1.5 sm:py-2 rounded-full">
+                                <div className="absolute bottom-2 sm:bottom-4 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs sm:text-sm px-3 sm:px-4 py-1.5 sm:py-2 rounded-full backdrop-blur-sm">
                                     {currentImageIndex + 1} / {images.length}
                                 </div>
                             </>

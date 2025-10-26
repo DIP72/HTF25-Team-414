@@ -1,4 +1,5 @@
-# backend/main.py - PRODUCTION READY
+# backend/main.py - PRODUCTION READY WITH CORRECT ENDPOINTS
+
 """
 Fast, Context-Aware AI Backend
 - Blocks: Direct slurs, threats (< 1ms)
@@ -51,9 +52,7 @@ NEWS_KEYWORDS = {
 }
 
 def detect_context(text: str) -> str:
-    """
-    Returns: 'news', 'short_slur', 'normal'
-    """
+    """Returns: 'news', 'short_slur', 'normal'"""
     text_lower = text.lower()
     word_count = len(text.split())
     
@@ -89,12 +88,10 @@ def truncate(text: str, limit: int) -> str:
     
     truncated = text[:limit]
     
-    # Try sentence ending
     sentence_end = max(truncated.rfind('. '), truncated.rfind('! '), truncated.rfind('? '))
     if sentence_end > limit * 0.75:
         return truncated[:sentence_end + 1].strip()
     
-    # Try clause ending
     clause_end = max(truncated.rfind(', '), truncated.rfind('; '), truncated.rfind(': '))
     if clause_end > limit * 0.65:
         result = truncated[:clause_end].strip()
@@ -102,7 +99,6 @@ def truncate(text: str, limit: int) -> str:
             result += '.'
         return result
     
-    # Word boundary
     last_space = truncated.rfind(' ')
     if last_space > limit * 0.5:
         result = truncated[:last_space].strip()
@@ -212,11 +208,9 @@ def health():
 # ================== MODERATION ==================
 async def moderate_smart(text: str) -> Dict[str, Any]:
     """Context-aware moderation"""
-    
     context_type = detect_context(text)
     print(f"📊 Context: {context_type} | Length: {len(text)}")
     
-    # NEWS - Always safe
     if context_type == 'news':
         print(f"✅ NEWS - Allowed")
         return {
@@ -227,7 +221,6 @@ async def moderate_smart(text: str) -> Dict[str, Any]:
             "raw_label": ""
         }
     
-    # SHORT SLUR - Always blocked
     if context_type == 'short_slur':
         print(f"🚫 BLOCKED - Short slur")
         return {
@@ -238,7 +231,6 @@ async def moderate_smart(text: str) -> Dict[str, Any]:
             "raw_label": "profanity"
         }
     
-    # NORMAL - Check profanity
     if profanity.contains_profanity(text):
         word_count = len(text.split())
         
@@ -252,7 +244,6 @@ async def moderate_smart(text: str) -> Dict[str, Any]:
                 "raw_label": "profanity"
             }
         else:
-            # Longer post - AI judges context
             print(f"🤖 AI analysis - Profanity in longer post")
             prompt = f"Is this appropriate or offensive? Text: {text[:500]}\nRespond: appropriate OR offensive"
             
@@ -269,7 +260,6 @@ async def moderate_smart(text: str) -> Dict[str, Any]:
             except:
                 pass
     
-    # Clean content
     print(f"✅ SAFE")
     return {
         "verdict": "safe",
@@ -287,7 +277,9 @@ async def get_sentiment(text: str) -> Dict[str, Any]:
     except:
         return {"label": "NEUTRAL", "confidence": 0.5}
 
-@app.post("/api/analyze-post")
+# ================== ENDPOINTS (FIXED NAMES) ==================
+
+@app.post("/api/analyze")  # ← Fixed from /api/analyze-post
 async def analyze_post(req: AnalyzePostRequest):
     text = clean(req.text)
     if not text:
@@ -312,8 +304,7 @@ async def moderate(req: AnalyzePostRequest):
         "verdict": "safe", "confidence": 0, "labels": [], "reason": "Empty", "raw_label": ""
     }
 
-# ================== SUMMARIZE ==================
-@app.post("/api/summarize-thread")
+@app.post("/api/summarize-thread")  # ← Correct name
 async def summarize_thread(req: SummarizeThreadRequest):
     texts = [clean(t) for t in req.texts if t]
     if not texts:
@@ -325,7 +316,6 @@ async def summarize_thread(req: SummarizeThreadRequest):
     if not replies and len(main) <= 250:
         return {"summary": main}
     
-    # Build context
     if not replies:
         context = f"Post: {main[:600]}"
     else:
@@ -350,19 +340,16 @@ async def summarize_thread(req: SummarizeThreadRequest):
     except:
         return {"summary": truncate(main, 200)}
 
-# ================== CONDENSE (IMPROVED) ==================
-@app.post("/api/condense-to-post")
+@app.post("/api/condense")  # ← Fixed from /api/condense-to-post
 async def condense(data: Dict[str, Any]):
     """Smart condensing with validation"""
     text = clean(data.get("text", ""))
     if not text or len(text) <= MAX_POST_CHARS:
         return {"draft": text}
     
-    # Just slightly over? Truncate
     if len(text) <= MAX_POST_CHARS + 150:
         return {"draft": truncate(text, MAX_POST_CHARS)}
     
-    # Calculate reduction needed
     current_len = len(text)
     target_len = int(MAX_POST_CHARS * 0.85)
     reduction_pct = int((1 - target_len / current_len) * 100)
@@ -380,16 +367,13 @@ Shorter ({target_len} chars):"""
     
     try:
         max_tokens = min(int(target_len / 3), 400)
-        
         draft = await generate(prompt, max_tokens=max_tokens, temp=0.7)
         
-        # Clean
         draft = re.sub(r'^(short|shorter|here|version):?\s*', '', draft, flags=re.I)
         draft = re.sub(r'#\w+', '', draft)
         draft = re.sub(r'[\U0001F300-\U0001F9FF\U00002600-\U000027BF]+', '', draft)
         draft = clean(draft)
         
-        # Validate
         if len(draft) > MAX_POST_CHARS:
             print(f"⚠️ AI output too long ({len(draft)}), truncating")
             draft = truncate(draft, MAX_POST_CHARS)
@@ -409,10 +393,9 @@ Shorter ({target_len} chars):"""
         print(f"❌ Condense error: {e}")
         return {"draft": truncate(text, MAX_POST_CHARS)}
 
-# ================== REWRITE ==================
-@app.post("/api/draft-post")
+@app.post("/api/draft")  # ← Fixed from /api/draft-post
 async def draft_post(data: Dict[str, Any]):
-    text = clean(data.get("prompt", ""))
+    text = clean(data.get("text", ""))  # ← Changed from "prompt" to "text"
     if len(text) < 5:
         return {"draft": ""}
     
@@ -432,8 +415,7 @@ async def draft_post(data: Dict[str, Any]):
     except:
         return {"draft": truncate(text, MAX_POST_CHARS)}
 
-# ================== SENTIMENT ONLY ==================
-@app.post("/api/sentiment-only")
+@app.post("/api/sentiment")  # ← Fixed from /api/sentiment-only
 async def sentiment_only(data: Dict[str, Any]):
     text = clean(data.get("text", ""))
     return {"sentiment": await get_sentiment(text) if text else {"label": "NEUTRAL", "confidence": 0.0}}

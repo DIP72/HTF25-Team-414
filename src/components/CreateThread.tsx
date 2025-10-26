@@ -5,7 +5,12 @@ import { parseMarkdown } from '@/utils/markdown';
 import { toast } from 'sonner';
 
 interface CreateThreadProps {
-  onPost: (content: string, images?: string[], labels?: string[], sentiment?: { label: string; confidence: number }) => void;
+  onPost: (
+    content: string,
+    images?: string[],
+    labels?: string[],
+    sentiment?: { label: string; confidence: number }
+  ) => Promise<void> | void;  // ← Allow async
   currentUser: {
     username: string;
     handle: string;
@@ -21,6 +26,7 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isPosting, setIsPosting] = useState(false);  // ← New state
   const [analysis, setAnalysis] = useState<{
     sentiment?: { label: string; confidence: number };
     moderation?: { verdict: string; labels?: string[]; reason?: string };
@@ -36,7 +42,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
   const overLimit = remaining < 0;
   const tooShort = compact(content).length < MIN_POST_CHARS && compact(content).length > 0;
 
-  // Debounced analysis
   const analyzeTimeout = useRef<NodeJS.Timeout | null>(null);
   
   const handleContentChange = (newContent: string) => {
@@ -49,11 +54,10 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
 
     const trimmed = compact(newContent);
     
-    // Only analyze if content is substantial enough
     if (trimmed.length >= MIN_POST_CHARS) {
       analyzeTimeout.current = setTimeout(async () => {
         await analyzeContent(newContent);
-      }, 1000); // Increased debounce for better performance
+      }, 1000);
     }
   };
 
@@ -71,7 +75,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
       };
       setAnalysis(newAnalysis);
 
-      // Show warning toast if blocked
       if (result.moderation?.verdict === 'blocked') {
         toast.error(`Blocked: ${result.moderation.reason || 'Content violates guidelines'}`);
       }
@@ -80,7 +83,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
     } catch (e: any) {
       console.error('Analysis failed:', e);
       
-      // Handle backend errors gracefully
       if (e.message?.includes('403') || e.message?.includes('blocked')) {
         const blockedAnalysis = {
           sentiment: { label: 'NEUTRAL', confidence: 0.5 },
@@ -96,7 +98,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
         return blockedAnalysis;
       }
       
-      // Default to safe on network errors
       return {
         sentiment: { label: 'NEUTRAL', confidence: 0.5 },
         moderation: { verdict: 'safe' },
@@ -110,7 +111,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
   const handlePost = async () => {
     const base = compact(content);
     
-    // Validation checks
     if (!base) {
       toast.error('Post cannot be empty');
       return;
@@ -135,7 +135,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
         if (res) finalAnalysis = res;
       } catch (e) {
         console.error('Pre-post analysis failed:', e);
-        // Allow posting on analysis error (fail open)
       } finally {
         setIsAnalyzing(false);
       }
@@ -147,20 +146,28 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
       return;
     }
 
-    // Post successfully
-    onPost(
-      base,
-      selectedImages.length > 0 ? selectedImages : undefined,
-      finalAnalysis?.moderation?.labels || [],
-      finalAnalysis?.sentiment || { label: 'NEUTRAL', confidence: 0.5 }
-    );
+    // Post to database
+    setIsPosting(true);
+    try {
+      await onPost(
+        base,
+        selectedImages.length > 0 ? selectedImages : undefined,
+        finalAnalysis?.moderation?.labels || [],
+        finalAnalysis?.sentiment || { label: 'NEUTRAL', confidence: 0.5 }
+      );
 
-    toast.success('Post published!');
-    
-    // Reset
-    setContent('');
-    setSelectedImages([]);
-    setAnalysis(null);
+      // Only reset on successful post
+      setContent('');
+      setSelectedImages([]);
+      setAnalysis(null);
+      
+      // Don't show toast here - Index.tsx will handle it
+    } catch (error) {
+      console.error('Post failed:', error);
+      // Error toast is handled by postsService
+    } finally {
+      setIsPosting(false);
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -336,7 +343,7 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
   };
 
   const isBlocked = analysis?.moderation?.verdict === 'blocked';
-  const canPost = !isBlocked && !tooShort && !overLimit && compact(content).length >= MIN_POST_CHARS;
+  const canPost = !isBlocked && !tooShort && !overLimit && compact(content).length >= MIN_POST_CHARS && !isPosting;
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4 shadow-sm">
@@ -354,10 +361,9 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
             }`}
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
-            disabled={isAnalyzing || isProcessing}
+            disabled={isAnalyzing || isProcessing || isPosting}
           />
 
-          {/* Image Previews */}
           {selectedImages.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-3">
               {selectedImages.map((img, idx) => (
@@ -374,7 +380,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
             </div>
           )}
 
-          {/* Analysis Badges */}
           {(analysis || isAnalyzing) && (
             <div className="flex items-center gap-2 mb-3 flex-wrap">
               {isAnalyzing && (
@@ -388,7 +393,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
             </div>
           )}
 
-          {/* Preview */}
           {showPreview && content.trim() && (
             <div className="mb-3 p-3 bg-gray-50 rounded-xl border border-gray-200">
               <div className="flex items-center justify-between mb-2">
@@ -406,15 +410,13 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
             </div>
           )}
 
-          {/* Controls */}
           <div className="flex items-center justify-between pt-3 border-t border-gray-200">
             <div className="flex items-center gap-1">
-              {/* Format buttons */}
               <button
                 onClick={() => applyFormat('bold')}
                 className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Bold"
-                disabled={isAnalyzing || isProcessing}
+                disabled={isAnalyzing || isProcessing || isPosting}
               >
                 <Bold className="w-4 h-4" strokeWidth={2.5} />
               </button>
@@ -422,7 +424,7 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
                 onClick={() => applyFormat('italic')}
                 className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Italic"
-                disabled={isAnalyzing || isProcessing}
+                disabled={isAnalyzing || isProcessing || isPosting}
               >
                 <Italic className="w-4 h-4" strokeWidth={2.5} />
               </button>
@@ -430,14 +432,13 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
                 onClick={() => applyFormat('underline')}
                 className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Underline"
-                disabled={isAnalyzing || isProcessing}
+                disabled={isAnalyzing || isProcessing || isPosting}
               >
                 <Underline className="w-4 h-4" strokeWidth={2.5} />
               </button>
 
               <div className="w-px h-6 bg-gray-300 mx-1" />
 
-              {/* Image upload */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -445,18 +446,17 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
                 multiple
                 className="hidden"
                 onChange={handleImageUpload}
-                disabled={isAnalyzing || isProcessing}
+                disabled={isAnalyzing || isProcessing || isPosting}
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-lg transition-all disabled:opacity-40"
                 title="Upload images"
-                disabled={isAnalyzing || isProcessing}
+                disabled={isAnalyzing || isProcessing || isPosting}
               >
                 <ImageIcon className="w-5 h-5" strokeWidth={2} />
               </button>
 
-              {/* Preview toggle */}
               <button
                 onClick={() => setShowPreview(!showPreview)}
                 className={`p-2 rounded-lg transition-all ${showPreview ? 'bg-blue-100 text-blue-600' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
@@ -468,11 +468,10 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
 
               <div className="w-px h-6 bg-gray-300 mx-1" />
 
-              {/* AI Tools */}
               <div className="relative" onClick={(e) => e.stopPropagation()}>
                 <button
                   onClick={() => setShowAIMenu(!showAIMenu)}
-                  disabled={!content.trim() || isAnalyzing || isProcessing}
+                  disabled={!content.trim() || isAnalyzing || isProcessing || isPosting}
                   className="p-2 text-blue-600 hover:bg-blue-50 hover:text-blue-700 rounded-full transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   title="AI Tools"
                 >
@@ -505,7 +504,6 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Character count */}
               <div className="text-xs text-gray-500">
                 {overLimit ? (
                   <span className="text-red-600 font-medium">Over by {Math.abs(remaining)}</span>
@@ -518,17 +516,29 @@ const CreateThread = ({ onPost, currentUser }: CreateThreadProps) => {
                 )}
               </div>
 
-              {/* Post button */}
               <button
                 onClick={handlePost}
-                disabled={!canPost || isAnalyzing || isProcessing}
+                disabled={!canPost || isAnalyzing || isProcessing || isPosting}
                 className={`px-5 py-2 rounded-full text-white text-[15px] font-bold transition-all ${
-                  !canPost || isAnalyzing || isProcessing
+                  !canPost || isAnalyzing || isProcessing || isPosting
                     ? 'bg-gray-400 cursor-not-allowed'
                     : 'bg-black hover:bg-gray-800'
                 }`}
               >
-                {isAnalyzing ? 'Analyzing...' : isBlocked ? 'Blocked' : tooShort ? 'Too Short' : 'Post'}
+                {isPosting ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Posting...
+                  </span>
+                ) : isAnalyzing ? (
+                  'Analyzing...'
+                ) : isBlocked ? (
+                  'Blocked'
+                ) : tooShort ? (
+                  'Too Short'
+                ) : (
+                  'Post'
+                )}
               </button>
             </div>
           </div>
