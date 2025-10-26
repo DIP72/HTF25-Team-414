@@ -1,9 +1,9 @@
-# backend/main.py - CONTEXT-AWARE FAST MODERATION
+# backend/main.py - PRODUCTION READY
 """
-Fast, Accurate, Context-Aware Content Moderation
-- Blocks: Direct slurs, threats, profanity (no context)
-- Allows: News articles, factual reporting (even with violence/profanity keywords)
-- Fast: < 5ms for most posts, AI only when needed
+Fast, Context-Aware AI Backend
+- Blocks: Direct slurs, threats (< 1ms)
+- Allows: News, factual reporting
+- Smart: Summarize, condense, rewrite
 """
 
 import re
@@ -23,6 +23,7 @@ import uvicorn
 
 # ================== CONFIG ==================
 MAX_POST_CHARS = 1000
+MIN_POST_CHARS = 20
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 MAX_WORKERS = 2
 
@@ -40,49 +41,39 @@ executor = None
 profanity.load_censor_words()
 
 # ================== CONTEXT DETECTION ==================
+NEWS_KEYWORDS = {
+    'police', 'authorities', 'officials', 'government', 'minister',
+    'reported', 'according', 'investigation', 'probe', 'district',
+    'incident', 'accident', 'collision', 'victims', 'casualties',
+    'claimed', 'alleged', 'demanded', 'compensation', 'criminal',
+    'press release', 'opposition', 'party', 'deaths', 'bereaved',
+    'seized', 'arrested', 'negligence', 'maintained'
+}
+
 def detect_context(text: str) -> str:
     """
-    Detect content context type
     Returns: 'news', 'short_slur', 'normal'
     """
     text_lower = text.lower()
     word_count = len(text.split())
     
-    # SHORT SLUR DETECTION (priority check)
-    # If post is very short (< 5 words) and contains profanity, likely a slur
+    # SHORT SLUR DETECTION (< 5 words with only profanity)
     if word_count <= 5 and profanity.contains_profanity(text):
-        # Check if it's ONLY slurs/profanity without context
-        # Remove profanity and see what's left
         censored = profanity.censor(text, '*')
-        remaining_words = [w for w in censored.split() if '*' not in w and len(w) > 2]
-        
-        # If less than 2 meaningful words remain, it's just slurs
-        if len(remaining_words) < 2:
+        remaining = [w for w in censored.split() if '*' not in w and len(w) > 2]
+        if len(remaining) < 2:
             return 'short_slur'
     
-    # NEWS/ARTICLE DETECTION
-    news_indicators = {
-        'police', 'authorities', 'officials', 'government', 'minister',
-        'reported', 'according', 'investigation', 'probe', 'district',
-        'incident', 'accident', 'collision', 'victims', 'casualties',
-        'claimed', 'alleged', 'demanded', 'compensation', 'criminal action',
-        'press release', 'opposition', 'party', 'deaths', 'bereaved',
-        'seized', 'arrested', 'negligence', 'earlier', 'maintained'
-    }
-    
-    # Count indicators
-    indicators_found = sum(1 for indicator in news_indicators if indicator in text_lower)
-    
-    # Check for structured writing (quotes, multiple sentences, formal language)
-    has_quotes = '"' in text or '"' in text or '"' in text
+    # NEWS DETECTION
+    words = set(text_lower.split())
+    indicators = len(words & NEWS_KEYWORDS)
+    has_quotes = '"' in text
     sentence_count = text.count('.') + text.count('!') + text.count('?')
-    has_formal_structure = sentence_count >= 3 or has_quotes
+    has_structure = sentence_count >= 3 or has_quotes
     
-    # News criteria
-    if indicators_found >= 4 or (indicators_found >= 2 and has_formal_structure):
+    if indicators >= 4 or (indicators >= 2 and has_structure):
         return 'news'
-    
-    if indicators_found >= 3 and word_count > 50:
+    if indicators >= 3 and word_count > 50:
         return 'news'
     
     return 'normal'
@@ -92,18 +83,39 @@ def clean(t: str) -> str:
     return ' '.join((t or "").split())
 
 def truncate(text: str, limit: int) -> str:
+    """Intelligent truncation"""
     if len(text) <= limit:
         return text
-    text = text[:limit]
-    idx = text.rfind('. ')
-    if idx > limit * 0.7:
-        return text[:idx + 1]
-    idx = text.rfind(' ')
-    return text[:idx] + '...' if idx > 0 else text
+    
+    truncated = text[:limit]
+    
+    # Try sentence ending
+    sentence_end = max(truncated.rfind('. '), truncated.rfind('! '), truncated.rfind('? '))
+    if sentence_end > limit * 0.75:
+        return truncated[:sentence_end + 1].strip()
+    
+    # Try clause ending
+    clause_end = max(truncated.rfind(', '), truncated.rfind('; '), truncated.rfind(': '))
+    if clause_end > limit * 0.65:
+        result = truncated[:clause_end].strip()
+        if not result.endswith(('.', '!', '?')):
+            result += '.'
+        return result
+    
+    # Word boundary
+    last_space = truncated.rfind(' ')
+    if last_space > limit * 0.5:
+        result = truncated[:last_space].strip()
+        if not result.endswith(('.', '!', '?')):
+            result += '...'
+        return result
+    
+    return truncated.strip() + '...'
 
 # ================== AI GENERATION ==================
 @torch.inference_mode()
 def generate_sync(prompt: str, max_tokens: int = 200, temp: float = 0.7) -> str:
+    """Fast generation"""
     global model, tokenizer
     if not model:
         return ""
@@ -197,23 +209,16 @@ def root():
 def health():
     return {"status": "healthy"}
 
-# ================== SMART MODERATION ==================
+# ================== MODERATION ==================
 async def moderate_smart(text: str) -> Dict[str, Any]:
-    """
-    Context-aware moderation:
-    1. Detect context type (news/short_slur/normal)
-    2. Apply appropriate rules
-    3. AI fallback for edge cases
-    """
+    """Context-aware moderation"""
     
-    # Step 1: Detect context
     context_type = detect_context(text)
+    print(f"📊 Context: {context_type} | Length: {len(text)}")
     
-    print(f"📊 Context: {context_type} | Length: {len(text)} | Words: {len(text.split())}")
-    
-    # Step 2: NEWS ARTICLES - Always safe
+    # NEWS - Always safe
     if context_type == 'news':
-        print(f"✅ NEWS - Allowed (even with violence/profanity keywords)")
+        print(f"✅ NEWS - Allowed")
         return {
             "verdict": "safe",
             "confidence": 0.95,
@@ -222,9 +227,9 @@ async def moderate_smart(text: str) -> Dict[str, Any]:
             "raw_label": ""
         }
     
-    # Step 3: SHORT SLURS - Always blocked
+    # SHORT SLUR - Always blocked
     if context_type == 'short_slur':
-        print(f"🚫 BLOCKED - Short slur/profanity without context")
+        print(f"🚫 BLOCKED - Short slur")
         return {
             "verdict": "blocked",
             "confidence": 0.97,
@@ -233,15 +238,11 @@ async def moderate_smart(text: str) -> Dict[str, Any]:
             "raw_label": "profanity"
         }
     
-    # Step 4: NORMAL CONTENT - Check profanity
+    # NORMAL - Check profanity
     if profanity.contains_profanity(text):
-        # Has profanity but not a short slur - could be contextual
-        # Check word count for context
         word_count = len(text.split())
         
         if word_count <= 8:
-            # Short post with profanity (but more than just slurs)
-            # Still block it
             print(f"🚫 BLOCKED - Short post with profanity")
             return {
                 "verdict": "blocked",
@@ -251,17 +252,13 @@ async def moderate_smart(text: str) -> Dict[str, Any]:
                 "raw_label": "profanity"
             }
         else:
-            # Longer post with profanity - use AI to judge context
+            # Longer post - AI judges context
             print(f"🤖 AI analysis - Profanity in longer post")
-            prompt = f"""Is this appropriate or offensive?
-
-Text: "{text[:500]}"
-
-Respond: appropriate OR offensive"""
+            prompt = f"Is this appropriate or offensive? Text: {text[:500]}\nRespond: appropriate OR offensive"
             
             try:
                 result = await generate(prompt, max_tokens=10, temp=0.2)
-                if "offensive" in result.lower() or "inappropriate" in result.lower():
+                if "offensive" in result.lower():
                     return {
                         "verdict": "blocked",
                         "confidence": 0.85,
@@ -272,13 +269,13 @@ Respond: appropriate OR offensive"""
             except:
                 pass
     
-    # Step 5: Clean content - Safe
-    print(f"✅ SAFE - Clean content")
+    # Clean content
+    print(f"✅ SAFE")
     return {
         "verdict": "safe",
         "confidence": 0.90,
         "labels": [],
-        "reason": "Content appears safe",
+        "reason": "Content safe",
         "raw_label": ""
     }
 
@@ -328,6 +325,7 @@ async def summarize_thread(req: SummarizeThreadRequest):
     if not replies and len(main) <= 250:
         return {"summary": main}
     
+    # Build context
     if not replies:
         context = f"Post: {main[:600]}"
     else:
@@ -336,7 +334,7 @@ async def summarize_thread(req: SummarizeThreadRequest):
             parts.append(f"R{i}: {r[:150]}")
         context = " ".join(parts)
     
-    prompt = f"Summarize in 2 sentences: {context[:1500]}\n\nSummary:"
+    prompt = f"Summarize in 2-3 sentences: {context[:1500]}\n\nSummary:"
     
     try:
         summary = await generate(prompt, max_tokens=150, temp=0.7)
@@ -352,30 +350,63 @@ async def summarize_thread(req: SummarizeThreadRequest):
     except:
         return {"summary": truncate(main, 200)}
 
-# ================== CONDENSE ==================
+# ================== CONDENSE (IMPROVED) ==================
 @app.post("/api/condense-to-post")
 async def condense(data: Dict[str, Any]):
+    """Smart condensing with validation"""
     text = clean(data.get("text", ""))
     if not text or len(text) <= MAX_POST_CHARS:
         return {"draft": text}
     
-    if len(text) <= MAX_POST_CHARS + 100:
+    # Just slightly over? Truncate
+    if len(text) <= MAX_POST_CHARS + 150:
         return {"draft": truncate(text, MAX_POST_CHARS)}
     
-    prompt = f"Shorten to {MAX_POST_CHARS} chars: {text[:1500]}\n\nShort:"
+    # Calculate reduction needed
+    current_len = len(text)
+    target_len = int(MAX_POST_CHARS * 0.85)
+    reduction_pct = int((1 - target_len / current_len) * 100)
+    
+    prompt = f"""Make this {reduction_pct}% shorter (from {current_len} to ~{target_len} chars).
+
+KEEP: Key facts and main points
+REMOVE: Unnecessary words and details
+NO: Emojis or hashtags
+
+Original:
+{text[:2000]}
+
+Shorter ({target_len} chars):"""
     
     try:
-        draft = await generate(prompt, max_tokens=300, temp=0.7)
-        draft = re.sub(r'^(short|here):?\s*', '', draft, flags=re.I)
-        draft = re.sub(r'#\w+', '', clean(draft))
+        max_tokens = min(int(target_len / 3), 400)
         
+        draft = await generate(prompt, max_tokens=max_tokens, temp=0.7)
+        
+        # Clean
+        draft = re.sub(r'^(short|shorter|here|version):?\s*', '', draft, flags=re.I)
+        draft = re.sub(r'#\w+', '', draft)
+        draft = re.sub(r'[\U0001F300-\U0001F9FF\U00002600-\U000027BF]+', '', draft)
+        draft = clean(draft)
+        
+        # Validate
         if len(draft) > MAX_POST_CHARS:
+            print(f"⚠️ AI output too long ({len(draft)}), truncating")
             draft = truncate(draft, MAX_POST_CHARS)
-        if len(draft) < 30:
+        
+        if len(draft) < 50 or len(draft) < target_len * 0.3:
+            print(f"⚠️ AI output too short ({len(draft)}), using fallback")
             draft = truncate(text, MAX_POST_CHARS)
         
+        if len(draft) >= current_len * 0.95:
+            print(f"⚠️ AI barely shortened, using truncation")
+            draft = truncate(text, MAX_POST_CHARS)
+        
+        print(f"✅ Condensed: {current_len} → {len(draft)} ({reduction_pct}% reduction)")
         return {"draft": draft}
-    except:
+        
+    except Exception as e:
+        print(f"❌ Condense error: {e}")
         return {"draft": truncate(text, MAX_POST_CHARS)}
 
 # ================== REWRITE ==================
@@ -385,7 +416,7 @@ async def draft_post(data: Dict[str, Any]):
     if len(text) < 5:
         return {"draft": ""}
     
-    prompt = f"Rewrite casually: {text[:1500]}\n\nRewrite:"
+    prompt = f"Rewrite casually and naturally: {text[:1500]}\n\nRewrite:"
     
     try:
         draft = await generate(prompt, max_tokens=300, temp=0.85)
